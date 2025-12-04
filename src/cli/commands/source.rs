@@ -1,0 +1,319 @@
+//! Source command implementation for external data sources.
+
+use anyhow::{Context, Result};
+use clap::Subcommand;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::process::Command;
+use std::time::Instant;
+
+use crate::cli::output::{IndexStats, get_formatter};
+use crate::models::{Config, OutputFormat, SourceType, Tag, parse_tags};
+use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
+use crate::sources::{SyncOptions, get_data_source};
+
+/// Source subcommands.
+#[derive(Debug, Subcommand)]
+pub enum SourceCommand {
+    /// List available data sources and their status
+    List,
+
+    /// Sync data from an external source
+    Sync {
+        /// Source type (jira, confluence, figma)
+        #[arg(required = true)]
+        source: String,
+
+        /// Source-specific query (e.g., JQL for Jira, CQL for Confluence)
+        #[arg(long, short = 'q')]
+        query: Option<String>,
+
+        /// Tags to apply to synced documents
+        #[arg(long, short = 't')]
+        tags: Option<String>,
+
+        /// Maximum items to sync
+        #[arg(long, default_value = "100")]
+        limit: u32,
+
+        /// Exclude pages under these ancestor IDs (Confluence only, comma-separated)
+        #[arg(long)]
+        exclude_ancestor: Option<String>,
+    },
+
+    /// Check if external CLI tools are installed
+    Status,
+}
+
+/// Handle the source command.
+pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bool) -> Result<()> {
+    let formatter = get_formatter(format);
+    let config = Config::load()?;
+
+    match cmd {
+        SourceCommand::List => handle_list(formatter.as_ref(), verbose),
+        SourceCommand::Sync {
+            source,
+            query,
+            tags,
+            limit,
+            exclude_ancestor,
+        } => {
+            handle_sync(
+                formatter.as_ref(),
+                &config,
+                &source,
+                query,
+                tags,
+                limit,
+                exclude_ancestor,
+                verbose,
+            )
+            .await
+        }
+        SourceCommand::Status => handle_status(formatter.as_ref(), verbose),
+    }
+}
+
+fn handle_list(_formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
+    println!("Available Data Sources");
+    println!("----------------------");
+    println!();
+
+    let sources = [
+        ("jira", "Jira issues via atlassian-cli", "atlassian-cli"),
+        (
+            "confluence",
+            "Confluence pages via atlassian-cli",
+            "atlassian-cli",
+        ),
+        ("figma", "Figma designs via figma-cli", "figma-cli"),
+    ];
+
+    for (name, description, cli) in &sources {
+        let available = check_cli_available(cli);
+        let status = if available { "✓" } else { "✗" };
+        println!("  {} {} - {}", status, name, description);
+        if !available {
+            println!("    CLI not found: {}", cli);
+        }
+    }
+
+    println!();
+    println!("Use 'ssearch source status' to check CLI availability.");
+    println!("Use 'ssearch source sync <source> --query <query>' to sync data.");
+
+    Ok(())
+}
+
+fn handle_status(_formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
+    println!("External CLI Status");
+    println!("-------------------");
+    println!();
+
+    let clis = [
+        (
+            "atlassian-cli",
+            "For Jira and Confluence integration",
+            "cargo install atlassian-cli",
+        ),
+        (
+            "figma-cli",
+            "For Figma design integration",
+            "cargo install figma-cli",
+        ),
+    ];
+
+    for (name, description, install_cmd) in &clis {
+        let available = check_cli_available(name);
+        if available {
+            println!("✓ {} - {}", name, description);
+            // Try to get version
+            if let Ok(output) = Command::new(name).arg("--version").output()
+                && output.status.success()
+            {
+                let version = String::from_utf8_lossy(&output.stdout);
+                println!("  Version: {}", version.trim());
+            }
+        } else {
+            println!("✗ {} - Not installed", name);
+            println!("  {}", description);
+            println!("  Install: {}", install_cmd);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_sync(
+    formatter: &dyn crate::cli::output::Formatter,
+    config: &Config,
+    source: &str,
+    query: Option<String>,
+    tags: Option<String>,
+    limit: u32,
+    exclude_ancestor: Option<String>,
+    verbose: bool,
+) -> Result<()> {
+    let start_time = Instant::now();
+
+    // Parse source type
+    let source_type: SourceType = source
+        .parse()
+        .map_err(|_| anyhow::anyhow!("unknown source type: {}", source))?;
+
+    if !source_type.is_external() {
+        anyhow::bail!(
+            "source '{}' is not an external source. Use 'ssearch index' for local files.",
+            source
+        );
+    }
+
+    // Get the data source implementation
+    let data_source = get_data_source(source_type)
+        .ok_or_else(|| anyhow::anyhow!("no implementation found for source: {}", source))?;
+
+    // Check CLI availability
+    if !data_source.check_available()? {
+        anyhow::bail!(
+            "Required CLI is not installed.\n{}",
+            data_source.install_instructions()
+        );
+    }
+
+    // Parse tags
+    let tags: Vec<Tag> = if let Some(ref tag_str) = tags {
+        parse_tags(tag_str).context("failed to parse tags")?
+    } else {
+        Vec::new()
+    };
+
+    // Parse exclude ancestors
+    let exclude_ancestors: Vec<String> = exclude_ancestor
+        .map(|s| s.split(',').map(|id| id.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    println!("Syncing from {} source...", data_source.name());
+    if verbose {
+        if let Some(ref q) = query {
+            println!("  Query: {}", q);
+        }
+        println!("  Limit: {}", limit);
+        if !exclude_ancestors.is_empty() {
+            println!("  Excluding ancestors: {:?}", exclude_ancestors);
+        }
+    }
+
+    // Create sync options
+    let sync_options = SyncOptions {
+        query,
+        tags,
+        limit: Some(limit),
+        exclude_ancestors,
+    };
+
+    // Fetch documents from the external source
+    let documents = data_source
+        .sync(sync_options)
+        .context("failed to sync from external source")?;
+
+    if documents.is_empty() {
+        println!(
+            "{}",
+            formatter.format_message("No documents found from source.")
+        );
+        return Ok(());
+    }
+
+    println!("Fetched {} documents, indexing...", documents.len());
+
+    // Initialize clients
+    let embedding_client = EmbeddingClient::new(&config.embedding)?;
+    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+
+    // Ensure collection exists
+    vector_client.create_collection().await?;
+
+    // Create chunker
+    let chunker = TextChunker::new(&config.indexing);
+
+    // Setup progress bar
+    let pb = ProgressBar::new(documents.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+
+    let mut stats = IndexStats {
+        files_scanned: documents.len() as u64,
+        ..Default::default()
+    };
+
+    // Process documents in batches
+    let batch_size = config.embedding.batch_size as usize;
+    let mut pending_chunks = Vec::new();
+    let mut pending_texts = Vec::new();
+
+    for document in &documents {
+        pb.inc(1);
+
+        if document.content.is_empty() {
+            stats.files_skipped += 1;
+            continue;
+        }
+
+        // Chunk document
+        let chunks = chunker.chunk(document);
+        stats.chunks_created += chunks.len() as u64;
+        stats.files_indexed += 1;
+
+        for chunk in chunks {
+            pending_texts.push(chunk.content.clone());
+            pending_chunks.push(chunk);
+        }
+
+        // Process batch if full
+        if pending_texts.len() >= batch_size {
+            process_batch(
+                &embedding_client,
+                &vector_client,
+                &mut pending_chunks,
+                &mut pending_texts,
+            )
+            .await?;
+        }
+    }
+
+    // Process remaining chunks
+    if !pending_texts.is_empty() {
+        process_batch(
+            &embedding_client,
+            &vector_client,
+            &mut pending_chunks,
+            &mut pending_texts,
+        )
+        .await?;
+    }
+
+    pb.finish_and_clear();
+
+    stats.duration_ms = start_time.elapsed().as_millis() as u64;
+
+    print!("{}", formatter.format_index_stats(&stats));
+
+    Ok(())
+}
+
+/// Check if a CLI command is available.
+fn check_cli_available(cmd: &str) -> bool {
+    Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
