@@ -1,0 +1,54 @@
+# Rust
+target/
+debug/
+release/
+*.rs.bk
+*.rlib
+*.prof*
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env*
+*.log
+*.tmp
+*.swp
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Coverage
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+
+# Embedding server
+embedding-server.pid
+embedding-server.log
+embedding-server/__pycache__/
+
+# Specify (local only)
+.specify/
+
+# Serena IDE (local only)
+.serena/
+
+# Claude Code (exclude all except skills for distribution)
+.claude/*
+!.claude/skills/
+
+# Added by cargo
+
+/target
