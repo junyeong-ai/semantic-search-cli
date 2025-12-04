@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+set -e
+
+BINARY_NAME="ssearch"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+SKILL_NAME="semantic-search"
+PROJECT_SKILL_DIR=".claude/skills/$SKILL_NAME"
+USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
+CONFIG_DIR="$HOME/.config/ssearch"
+
+detect_platform() {
+    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local arch=$(uname -m)
+
+    case "$os" in
+        linux) os="unknown-linux-gnu" ;;
+        darwin) os="apple-darwin" ;;
+        *) echo "Unsupported OS: $os"; exit 1 ;;
+    esac
+
+    case "$arch" in
+        x86_64) arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        *) echo "Unsupported architecture: $arch"; exit 1 ;;
+    esac
+
+    echo "${arch}-${os}"
+}
+
+build_from_source() {
+    echo "🔨 Building from source..." >&2
+    if ! cargo build --release 2>&1 | grep -E "Compiling|Finished|error" >&2; then
+        echo "❌ Build failed" >&2
+        exit 1
+    fi
+    echo "target/release/$BINARY_NAME"
+}
+
+install_binary() {
+    local binary_path="$1"
+
+    mkdir -p "$INSTALL_DIR"
+    cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
+    chmod +x "$INSTALL_DIR/$BINARY_NAME"
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        codesign --force --deep --sign - "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
+    fi
+
+    echo "✅ Installed to $INSTALL_DIR/$BINARY_NAME" >&2
+}
+
+get_skill_version() {
+    local skill_md="$1"
+    [ -f "$skill_md" ] && grep "^version:" "$skill_md" 2>/dev/null | sed 's/version: *//' || echo "unknown"
+}
+
+check_skill_exists() {
+    [ -d "$USER_SKILL_DIR" ] && [ -f "$USER_SKILL_DIR/SKILL.md" ]
+}
+
+compare_versions() {
+    local ver1="$1"
+    local ver2="$2"
+
+    if [ "$ver1" = "$ver2" ]; then
+        echo "equal"
+    elif [ "$ver1" = "unknown" ] || [ "$ver2" = "unknown" ]; then
+        echo "unknown"
+    else
+        if [ "$(printf '%s\n' "$ver1" "$ver2" | sort -V | head -n1)" = "$ver1" ]; then
+            [ "$ver1" != "$ver2" ] && echo "older" || echo "equal"
+        else
+            echo "newer"
+        fi
+    fi
+}
+
+backup_skill() {
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_dir="$USER_SKILL_DIR.backup_$timestamp"
+
+    echo "📦 Creating backup: $backup_dir" >&2
+    cp -r "$USER_SKILL_DIR" "$backup_dir"
+    echo "   ✅ Backup created" >&2
+}
+
+install_skill() {
+    echo "📋 Installing skill to $USER_SKILL_DIR" >&2
+    mkdir -p "$(dirname "$USER_SKILL_DIR")"
+    cp -r "$PROJECT_SKILL_DIR" "$USER_SKILL_DIR"
+    echo "   ✅ Skill installed" >&2
+}
+
+prompt_skill_installation() {
+    [ ! -d "$PROJECT_SKILL_DIR" ] && return 0
+
+    local project_version=$(get_skill_version "$PROJECT_SKILL_DIR/SKILL.md")
+
+    echo "" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "🤖 Claude Code Skill Installation" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "" >&2
+    echo "Skill: $SKILL_NAME (v$project_version)" >&2
+    echo "" >&2
+
+    if check_skill_exists; then
+        local existing_version=$(get_skill_version "$USER_SKILL_DIR/SKILL.md")
+        local comparison=$(compare_versions "$existing_version" "$project_version")
+
+        echo "Status: Already installed (v$existing_version)" >&2
+        echo "" >&2
+
+        case "$comparison" in
+            equal)
+                echo "✅ Latest version installed" >&2
+                echo "" >&2
+                read -p "Reinstall? [y/N]: " choice
+                [[ "$choice" =~ ^[yY]$ ]] && { backup_skill; rm -rf "$USER_SKILL_DIR"; install_skill; } || echo "   ⏭️  Skipped" >&2
+                ;;
+            older)
+                echo "🔄 New version available: v$project_version" >&2
+                echo "" >&2
+                read -p "Update? [Y/n]: " choice
+                [[ ! "$choice" =~ ^[nN]$ ]] && { backup_skill; rm -rf "$USER_SKILL_DIR"; install_skill; echo "   ✅ Updated to v$project_version" >&2; } || echo "   ⏭️  Keeping current version" >&2
+                ;;
+            newer)
+                echo "⚠️  Installed version (v$existing_version) > project version (v$project_version)" >&2
+                echo "" >&2
+                read -p "Downgrade? [y/N]: " choice
+                [[ "$choice" =~ ^[yY]$ ]] && { backup_skill; rm -rf "$USER_SKILL_DIR"; install_skill; } || echo "   ⏭️  Keeping current version" >&2
+                ;;
+            *)
+                echo "⚠️  Version comparison failed" >&2
+                echo "" >&2
+                read -p "Reinstall? [y/N]: " choice
+                [[ "$choice" =~ ^[yY]$ ]] && { backup_skill; rm -rf "$USER_SKILL_DIR"; install_skill; } || echo "   ⏭️  Skipped" >&2
+                ;;
+        esac
+    else
+        echo "Installation options:" >&2
+        echo "" >&2
+        echo "  [1] User-level install (RECOMMENDED)" >&2
+        echo "      → ~/.claude/skills/ (available in all projects)" >&2
+        echo "" >&2
+        echo "  [2] Project-level only" >&2
+        echo "      → Works only in this project directory" >&2
+        echo "" >&2
+        echo "  [3] Skip" >&2
+        echo "" >&2
+
+        read -p "Choose [1-3] (default: 1): " choice
+        case "$choice" in
+            2)
+                echo "" >&2
+                echo "✅ Using project-level skill" >&2
+                echo "   Location: $(pwd)/$PROJECT_SKILL_DIR" >&2
+                ;;
+            3)
+                echo "" >&2
+                echo "⏭️  Skipped" >&2
+                ;;
+            1|"")
+                echo "" >&2
+                install_skill
+                echo "" >&2
+                echo "🎉 Skill installed successfully!" >&2
+                echo "" >&2
+                echo "Claude Code can now:" >&2
+                echo "  • Execute semantic searches automatically" >&2
+                echo "  • Index local files and directories" >&2
+                echo "  • Sync external sources (Jira, Confluence, Figma)" >&2
+                ;;
+            *)
+                echo "" >&2
+                echo "❌ Invalid choice. Skipped." >&2
+                ;;
+        esac
+    fi
+
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+}
+
+check_dependencies() {
+    echo "🔍 Checking dependencies..." >&2
+    echo "" >&2
+
+    local missing=0
+
+    # Check Rust
+    if command -v cargo >/dev/null 2>&1; then
+        echo "  ✅ Rust: $(cargo --version)" >&2
+    else
+        echo "  ❌ Rust: Not installed" >&2
+        echo "     Install: https://rustup.rs" >&2
+        missing=1
+    fi
+
+    # Check Docker (for Qdrant)
+    if command -v docker >/dev/null 2>&1; then
+        echo "  ✅ Docker: $(docker --version | cut -d' ' -f3 | tr -d ',')" >&2
+    else
+        echo "  ⚠️  Docker: Not installed (required for Qdrant)" >&2
+    fi
+
+    # Check Python (for embedding server)
+    if command -v python3 >/dev/null 2>&1; then
+        echo "  ✅ Python: $(python3 --version | cut -d' ' -f2)" >&2
+    else
+        echo "  ⚠️  Python3: Not installed (required for embedding server)" >&2
+    fi
+
+    echo "" >&2
+    return $missing
+}
+
+setup_config() {
+    if [ ! -d "$CONFIG_DIR" ]; then
+        echo "📝 Creating default configuration..." >&2
+        mkdir -p "$CONFIG_DIR"
+
+        if command -v "$BINARY_NAME" >/dev/null 2>&1 || [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+            "$INSTALL_DIR/$BINARY_NAME" config init 2>/dev/null || true
+            echo "   ✅ Configuration created at $CONFIG_DIR" >&2
+        fi
+    else
+        echo "ℹ️  Configuration already exists at $CONFIG_DIR" >&2
+    fi
+}
+
+main() {
+    echo "🚀 Installing Semantic Search CLI (ssearch)..." >&2
+    echo "" >&2
+
+    check_dependencies || exit 1
+
+    local binary_path=""
+    local target=$(detect_platform)
+
+    echo "Target platform: $target" >&2
+    echo "" >&2
+
+    binary_path=$(build_from_source)
+    install_binary "$binary_path"
+
+    echo "" >&2
+    if echo "$PATH" | grep -q "$INSTALL_DIR"; then
+        echo "✅ $INSTALL_DIR is in PATH" >&2
+    else
+        echo "⚠️  $INSTALL_DIR not in PATH" >&2
+        echo "" >&2
+        echo "Add to shell profile (~/.bashrc, ~/.zshrc):" >&2
+        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
+    fi
+    echo "" >&2
+
+    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        echo "Installed version:" >&2
+        "$INSTALL_DIR/$BINARY_NAME" --version >&2 || echo "  v0.1.0" >&2
+        echo "" >&2
+    fi
+
+    setup_config
+    prompt_skill_installation
+
+    echo "" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "🎉 Installation Complete!" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "" >&2
+    echo "Next steps:" >&2
+    echo "" >&2
+    echo "1. Start infrastructure:" >&2
+    echo "   docker-compose up -d qdrant" >&2
+    echo "   cd embedding-server && python server.py &" >&2
+    echo "" >&2
+    echo "2. Check status:         ssearch status" >&2
+    echo "3. Index files:          ssearch index <path>" >&2
+    echo "4. Search:               ssearch search \"your query\"" >&2
+    echo "" >&2
+    echo "External sources (optional):" >&2
+    echo "   ssearch source sync jira --query \"project=ABC\"" >&2
+    echo "   ssearch source sync confluence --query \"space=DOCS\"" >&2
+    echo "" >&2
+}
+
+main
