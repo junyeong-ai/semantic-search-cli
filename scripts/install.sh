@@ -3,6 +3,7 @@ set -e
 
 BINARY_NAME="ssearch"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+REPO="junyeong-ai/semantic-search-cli"
 SKILL_NAME="semantic-search"
 PROJECT_SKILL_DIR=".claude/skills/$SKILL_NAME"
 USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
@@ -25,6 +26,46 @@ detect_platform() {
     esac
 
     echo "${arch}-${os}"
+}
+
+get_latest_version() {
+    curl -sf "https://api.github.com/repos/$REPO/releases/latest" \
+        | grep '"tag_name"' \
+        | sed -E 's/.*"v([^"]+)".*/\1/' \
+        || echo ""
+}
+
+download_binary() {
+    local version="$1"
+    local target="$2"
+    local archive="ssearch-v${version}-${target}.tar.gz"
+    local url="https://github.com/$REPO/releases/download/v${version}/${archive}"
+    local checksum_url="${url}.sha256"
+
+    echo "📥 Downloading $archive..." >&2
+    if ! curl -fLO "$url" 2>&2; then
+        echo "❌ Download failed" >&2
+        return 1
+    fi
+
+    echo "🔐 Verifying checksum..." >&2
+    if curl -fLO "$checksum_url" 2>&2; then
+        if command -v sha256sum >/dev/null; then
+            sha256sum -c "${archive}.sha256" >&2 || return 1
+        elif command -v shasum >/dev/null; then
+            shasum -a 256 -c "${archive}.sha256" >&2 || return 1
+        else
+            echo "⚠️  No checksum tool found, skipping verification" >&2
+        fi
+    else
+        echo "⚠️  Checksum file not found, skipping verification" >&2
+    fi
+
+    echo "📦 Extracting..." >&2
+    tar -xzf "$archive" 2>&2
+    rm -f "$archive" "${archive}.sha256"
+
+    echo "$BINARY_NAME"
 }
 
 build_from_source() {
@@ -188,13 +229,11 @@ check_dependencies() {
 
     local missing=0
 
-    # Check Rust
+    # Check Rust (only needed for source build)
     if command -v cargo >/dev/null 2>&1; then
         echo "  ✅ Rust: $(cargo --version)" >&2
     else
-        echo "  ❌ Rust: Not installed" >&2
-        echo "     Install: https://rustup.rs" >&2
-        missing=1
+        echo "  ⚠️  Rust: Not installed (needed only for source build)" >&2
     fi
 
     # Check Docker (for Qdrant)
@@ -233,15 +272,56 @@ main() {
     echo "🚀 Installing Semantic Search CLI (ssearch)..." >&2
     echo "" >&2
 
-    check_dependencies || exit 1
+    check_dependencies
 
     local binary_path=""
     local target=$(detect_platform)
+    local version=$(get_latest_version)
 
     echo "Target platform: $target" >&2
-    echo "" >&2
 
-    binary_path=$(build_from_source)
+    if [ -n "$version" ] && command -v curl >/dev/null; then
+        echo "Latest version: v$version" >&2
+        echo "" >&2
+        echo "Installation method:" >&2
+        echo "  [1] Download prebuilt binary (RECOMMENDED - fast)" >&2
+        echo "  [2] Build from source (requires Rust toolchain)" >&2
+        echo "" >&2
+        read -p "Choose [1-2] (default: 1): " method
+
+        case "$method" in
+            2)
+                if ! command -v cargo >/dev/null 2>&1; then
+                    echo "❌ Rust toolchain not found. Install from https://rustup.rs" >&2
+                    exit 1
+                fi
+                binary_path=$(build_from_source)
+                ;;
+            1|"")
+                binary_path=$(download_binary "$version" "$target") || {
+                    echo "⚠️  Download failed, falling back to source build" >&2
+                    if ! command -v cargo >/dev/null 2>&1; then
+                        echo "❌ Rust toolchain not found. Install from https://rustup.rs" >&2
+                        exit 1
+                    fi
+                    binary_path=$(build_from_source)
+                }
+                ;;
+            *)
+                echo "❌ Invalid choice" >&2
+                exit 1
+                ;;
+        esac
+    else
+        [ -z "$version" ] && echo "⚠️  Cannot fetch latest version, building from source" >&2
+        if ! command -v cargo >/dev/null 2>&1; then
+            echo "❌ Rust toolchain not found and cannot download binary." >&2
+            echo "   Install Rust from https://rustup.rs" >&2
+            exit 1
+        fi
+        binary_path=$(build_from_source)
+    fi
+
     install_binary "$binary_path"
 
     echo "" >&2
@@ -276,7 +356,7 @@ main() {
     echo "   cd embedding-server && python server.py &" >&2
     echo "" >&2
     echo "2. Check status:         ssearch status" >&2
-    echo "3. Index files:          ssearch index <path>" >&2
+    echo "3. Index files:          ssearch index add <path>" >&2
     echo "4. Search:               ssearch search \"your query\"" >&2
     echo "" >&2
     echo "External sources (optional):" >&2

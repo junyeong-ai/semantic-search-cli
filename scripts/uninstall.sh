@@ -16,98 +16,131 @@ echo
 
 if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
     rm "$INSTALL_DIR/$BINARY_NAME"
-    echo "✅ Removed binary: $INSTALL_DIR/$BINARY_NAME"
+    echo "✅ Removed $INSTALL_DIR/$BINARY_NAME"
 else
     echo "⚠️  Binary not found at $INSTALL_DIR/$BINARY_NAME"
 fi
-echo
 
 # ============================================================================
-# Skill Removal
+# Skill Cleanup
 # ============================================================================
 
-if [ -d "$USER_SKILL_DIR" ]; then
+cleanup_skill() {
+    echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🤖 Claude Code Skill Found"
+    echo "🤖 Claude Code Skill Cleanup"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo "User-level skill detected at: $USER_SKILL_DIR"
-    echo ""
-    read -p "Remove Claude Code skill? [y/N]: " -n 1 -r
-    echo
-    echo
 
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        read -p "Create backup before removing? [Y/n]: " -n 1 -r
-        echo
+    if [ -d "$USER_SKILL_DIR" ]; then
+        echo "User-level skill found at: $USER_SKILL_DIR"
+        echo ""
+        read -p "Remove user-level skill? [y/N]: " choice
         echo
 
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            timestamp=$(date +%Y%m%d_%H%M%S)
-            backup_dir="$USER_SKILL_DIR.backup_$timestamp"
-            cp -r "$USER_SKILL_DIR" "$backup_dir"
-            echo "📦 Backup created: $backup_dir"
-        fi
+        case "$choice" in
+            y|Y)
+                # Check for backups (both old and new formats)
+                local backup_count=0
+                local old_backups=$(ls -d "${USER_SKILL_DIR}.bak-"* 2>/dev/null | wc -l | tr -d ' ')
+                local new_backups=$(ls -d "${USER_SKILL_DIR}.backup_"* 2>/dev/null | wc -l | tr -d ' ')
+                backup_count=$((old_backups + new_backups))
 
-        rm -rf "$USER_SKILL_DIR"
-        echo "✅ Removed user-level skill"
+                if [ "$backup_count" -gt 0 ]; then
+                    echo "Found $backup_count backup(s):"
+                    ls -d "${USER_SKILL_DIR}.bak-"* 2>/dev/null | while read backup; do
+                        echo "  • $(basename "$backup")"
+                    done
+                    ls -d "${USER_SKILL_DIR}.backup_"* 2>/dev/null | while read backup; do
+                        echo "  • $(basename "$backup")"
+                    done
+                    echo ""
+                    read -p "Remove skill backups too? [y/N]: " backup_choice
+                    echo
 
-        # Cleanup empty parent directory if it exists
-        if [ -d "$HOME/.claude/skills" ] && [ -z "$(ls -A "$HOME/.claude/skills")" ]; then
-            rmdir "$HOME/.claude/skills"
-            echo "   Cleaned up empty skills directory"
-        fi
+                    case "$backup_choice" in
+                        y|Y)
+                            rm -rf "${USER_SKILL_DIR}.bak-"* 2>/dev/null || true
+                            rm -rf "${USER_SKILL_DIR}.backup_"* 2>/dev/null || true
+                            echo "✅ Removed skill backups"
+                            ;;
+                        *)
+                            echo "⏭️  Kept skill backups"
+                            ;;
+                    esac
+                fi
+
+                rm -rf "$USER_SKILL_DIR"
+                echo "✅ Removed user-level skill"
+
+                # Cleanup empty parent directories
+                if [ -d "$HOME/.claude/skills" ] && [ -z "$(ls -A "$HOME/.claude/skills")" ]; then
+                    rmdir "$HOME/.claude/skills"
+                    echo "   Cleaned up empty skills directory"
+
+                    if [ -d "$HOME/.claude" ] && [ -z "$(ls -A "$HOME/.claude")" ]; then
+                        rmdir "$HOME/.claude"
+                        echo "   Cleaned up empty .claude directory"
+                    fi
+                fi
+                ;;
+            *)
+                echo "⏭️  Kept user-level skill"
+                ;;
+        esac
     else
-        echo "⏭️  Kept user-level skill"
+        echo "⚠️  User-level skill not found at: $USER_SKILL_DIR"
     fi
-    echo
-else
-    echo "ℹ️  No user-level skill found at $USER_SKILL_DIR"
-    echo
-fi
+
+    echo ""
+    echo "Note: Project-level skill at ./.claude/skills/$SKILL_NAME is NOT removed."
+    echo "It's part of the project repository and may be useful for development."
+}
+
+cleanup_skill
 
 # ============================================================================
-# Configuration Removal
+# Configuration Cleanup
 # ============================================================================
 
+echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "⚙️  Configuration & Cache"
+echo "🔧 Configuration Cleanup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
 if [ -d "$CONFIG_DIR" ]; then
-    echo "Found configuration directory: $CONFIG_DIR"
+    echo "Configuration found at: $CONFIG_DIR"
     echo ""
-    read -p "Remove configuration? [y/N]: " -n 1 -r
-    echo
+    read -p "Remove configuration? [y/N]: " choice
     echo
 
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        rm -rf "$CONFIG_DIR"
-        echo "✅ Removed configuration: $CONFIG_DIR"
-    else
-        echo "⏭️  Kept configuration"
-    fi
+    case "$choice" in
+        y|Y)
+            rm -rf "$CONFIG_DIR"
+            echo "✅ Removed configuration: $CONFIG_DIR"
+            ;;
+        *)
+            echo "⏭️  Kept configuration"
+            ;;
+    esac
 else
-    echo "ℹ️  No configuration directory found"
+    echo "⚠️  Configuration not found at: $CONFIG_DIR"
 fi
 
-echo
+# ============================================================================
+# Final Message
+# ============================================================================
+
+echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ Uninstallation Complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo
-
-echo "ℹ️  Notes:"
 echo ""
-echo "• Project-level skill (if any) remains at .claude/skills/$SKILL_NAME"
-echo "  This is distributed via git and shared with your team"
+echo "Remaining items (not automatically removed):"
+echo "  • Project-level skill: ./.claude/skills/$SKILL_NAME"
+echo "  • Qdrant data in Docker volumes (docker-compose down -v to remove)"
+echo "  • Embedding server process (pkill -f 'python.*server.py')"
 echo ""
-echo "• Qdrant data is stored separately in Docker volumes"
-echo "  To remove: docker-compose down -v"
+echo "To reinstall: ./scripts/install.sh"
 echo ""
-echo "• Embedding server is a separate Python process"
-echo "  Kill if running: pkill -f 'python.*server.py'"
-echo ""
-echo "• To reinstall: ./scripts/install.sh"
-echo
