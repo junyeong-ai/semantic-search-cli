@@ -352,7 +352,10 @@ impl VectorStoreClient {
         Ok(())
     }
 
-    pub async fn delete_by_source_type(&self, source_type: SourceType) -> Result<(), VectorStoreError> {
+    pub async fn delete_by_source_type(
+        &self,
+        source_type: SourceType,
+    ) -> Result<(), VectorStoreError> {
         let source_type_str = source_type.to_string();
         let source_tag = format!("source:{}", source_type_str);
 

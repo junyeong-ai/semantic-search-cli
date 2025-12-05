@@ -8,7 +8,9 @@ use std::time::Instant;
 use walkdir::WalkDir;
 
 use crate::cli::output::{IndexStats, get_formatter};
-use crate::models::{Config, Document, DocumentMetadata, OutputFormat, Source, SourceType, Tag, parse_tags};
+use crate::models::{
+    Config, Document, DocumentMetadata, OutputFormat, Source, SourceType, Tag, parse_tags,
+};
 use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
 use crate::utils::file::{calculate_checksum, is_text_file, read_file_content};
 
@@ -244,7 +246,10 @@ async fn handle_delete(
     if dry_run {
         println!(
             "{}",
-            formatter.format_message(&format!("Dry run: Would delete documents matching '{}'", path_str))
+            formatter.format_message(&format!(
+                "Dry run: Would delete documents matching '{}'",
+                path_str
+            ))
         );
         return Ok(());
     }
@@ -291,10 +296,7 @@ async fn handle_delete(
 
     println!(
         "{}",
-        formatter.format_message(&format!(
-            "Deleted {} document(s) from index",
-            files.len()
-        ))
+        formatter.format_message(&format!("Deleted {} document(s) from index", files.len()))
     );
 
     Ok(())
