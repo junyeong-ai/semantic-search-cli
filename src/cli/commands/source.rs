@@ -11,7 +11,6 @@ use crate::models::{Config, OutputFormat, SourceType, Tag, parse_tags};
 use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
 use crate::sources::{SyncOptions, get_data_source};
 
-/// Source subcommands.
 #[derive(Debug, Subcommand)]
 pub enum SourceCommand {
     /// List available data sources and their status
@@ -40,11 +39,21 @@ pub enum SourceCommand {
         exclude_ancestor: Option<String>,
     },
 
+    /// Delete all indexed documents from a source type
+    Delete {
+        /// Source type to delete (jira, confluence, figma)
+        #[arg(required = true)]
+        source: String,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        force: bool,
+    },
+
     /// Check if external CLI tools are installed
     Status,
 }
 
-/// Handle the source command.
 pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bool) -> Result<()> {
     let formatter = get_formatter(format);
     let config = Config::load()?;
@@ -69,6 +78,9 @@ pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bo
                 verbose,
             )
             .await
+        }
+        SourceCommand::Delete { source, force } => {
+            handle_delete(formatter.as_ref(), &config, &source, force, verbose).await
         }
         SourceCommand::Status => handle_status(formatter.as_ref(), verbose),
     }
@@ -127,7 +139,6 @@ fn handle_status(_formatter: &dyn crate::cli::output::Formatter, _verbose: bool)
         let available = check_cli_available(name);
         if available {
             println!("✓ {} - {}", name, description);
-            // Try to get version
             if let Ok(output) = Command::new(name).arg("--version").output()
                 && output.status.success()
             {
@@ -158,23 +169,20 @@ async fn handle_sync(
 ) -> Result<()> {
     let start_time = Instant::now();
 
-    // Parse source type
     let source_type: SourceType = source
         .parse()
         .map_err(|_| anyhow::anyhow!("unknown source type: {}", source))?;
 
     if !source_type.is_external() {
         anyhow::bail!(
-            "source '{}' is not an external source. Use 'ssearch index' for local files.",
+            "source '{}' is not an external source. Use 'ssearch index add' for local files.",
             source
         );
     }
 
-    // Get the data source implementation
     let data_source = get_data_source(source_type)
         .ok_or_else(|| anyhow::anyhow!("no implementation found for source: {}", source))?;
 
-    // Check CLI availability
     if !data_source.check_available()? {
         anyhow::bail!(
             "Required CLI is not installed.\n{}",
@@ -182,14 +190,12 @@ async fn handle_sync(
         );
     }
 
-    // Parse tags
     let tags: Vec<Tag> = if let Some(ref tag_str) = tags {
         parse_tags(tag_str).context("failed to parse tags")?
     } else {
         Vec::new()
     };
 
-    // Parse exclude ancestors
     let exclude_ancestors: Vec<String> = exclude_ancestor
         .map(|s| s.split(',').map(|id| id.trim().to_string()).collect())
         .unwrap_or_default();
@@ -205,7 +211,6 @@ async fn handle_sync(
         }
     }
 
-    // Create sync options
     let sync_options = SyncOptions {
         query,
         tags,
@@ -213,7 +218,6 @@ async fn handle_sync(
         exclude_ancestors,
     };
 
-    // Fetch documents from the external source
     let documents = data_source
         .sync(sync_options)
         .context("failed to sync from external source")?;
@@ -228,17 +232,12 @@ async fn handle_sync(
 
     println!("Fetched {} documents, indexing...", documents.len());
 
-    // Initialize clients
     let embedding_client = EmbeddingClient::new(&config.embedding)?;
     let vector_client = VectorStoreClient::new(&config.vector_store).await?;
-
-    // Ensure collection exists
     vector_client.create_collection().await?;
 
-    // Create chunker
     let chunker = TextChunker::new(&config.indexing);
 
-    // Setup progress bar
     let pb = ProgressBar::new(documents.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -254,7 +253,6 @@ async fn handle_sync(
         ..Default::default()
     };
 
-    // Process documents in batches
     let batch_size = config.embedding.batch_size as usize;
     let mut pending_chunks = Vec::new();
     let mut pending_texts = Vec::new();
@@ -267,7 +265,6 @@ async fn handle_sync(
             continue;
         }
 
-        // Chunk document
         let chunks = chunker.chunk(document);
         stats.chunks_created += chunks.len() as u64;
         stats.files_indexed += 1;
@@ -277,7 +274,6 @@ async fn handle_sync(
             pending_chunks.push(chunk);
         }
 
-        // Process batch if full
         if pending_texts.len() >= batch_size {
             process_batch(
                 &embedding_client,
@@ -289,7 +285,6 @@ async fn handle_sync(
         }
     }
 
-    // Process remaining chunks
     if !pending_texts.is_empty() {
         process_batch(
             &embedding_client,
@@ -301,15 +296,58 @@ async fn handle_sync(
     }
 
     pb.finish_and_clear();
-
     stats.duration_ms = start_time.elapsed().as_millis() as u64;
-
     print!("{}", formatter.format_index_stats(&stats));
 
     Ok(())
 }
 
-/// Check if a CLI command is available.
+async fn handle_delete(
+    formatter: &dyn crate::cli::output::Formatter,
+    config: &Config,
+    source: &str,
+    force: bool,
+    verbose: bool,
+) -> Result<()> {
+    let source_type: SourceType = source
+        .parse()
+        .map_err(|_| anyhow::anyhow!("unknown source type: {}", source))?;
+
+    if !source_type.is_external() {
+        anyhow::bail!(
+            "source '{}' is not an external source. Use 'ssearch index delete' for local files.",
+            source
+        );
+    }
+
+    if verbose {
+        println!("Deleting all {} documents from index...", source);
+    }
+
+    if !force {
+        println!(
+            "This will delete all indexed documents from source '{}'. Continue? [y/N]",
+            source
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("{}", formatter.format_message("Cancelled."));
+            return Ok(());
+        }
+    }
+
+    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    vector_client.delete_by_source_type(source_type).await?;
+
+    println!(
+        "{}",
+        formatter.format_message(&format!("Deleted all {} documents from index.", source))
+    );
+
+    Ok(())
+}
+
 fn check_cli_available(cmd: &str) -> bool {
     Command::new("which")
         .arg(cmd)
