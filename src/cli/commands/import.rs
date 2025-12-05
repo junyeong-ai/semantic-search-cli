@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::cli::output::{IndexStats, get_formatter};
-use crate::models::{Config, Document, DocumentMetadata, OutputFormat, Source, Tag, parse_tags};
+use crate::models::{
+    Config, Document, DocumentMetadata, OutputFormat, Source, SourceType, Tag, parse_tags,
+};
 use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
 
 /// Arguments for the import command.
@@ -42,6 +44,13 @@ pub struct ImportDocument {
 
     /// Document title (optional)
     pub title: Option<String>,
+
+    /// Tags from JSON file (optional, format: ["key:value", ...])
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Source type (optional, e.g., "confluence", "jira")
+    pub source_type: Option<String>,
 }
 
 /// Handle the import command.
@@ -118,7 +127,18 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
         }
 
         // Create document
-        let source = Source::custom(&import_doc.url);
+        let source = match import_doc.source_type.as_deref() {
+            Some(st)
+                if st
+                    .parse::<SourceType>()
+                    .map(|t| t.is_external())
+                    .unwrap_or(false) =>
+            {
+                let source_type: SourceType = st.parse().unwrap();
+                Source::external(source_type, &import_doc.url, &import_doc.url)
+            }
+            _ => Source::custom(&import_doc.url),
+        };
         let metadata = DocumentMetadata {
             filename: None,
             extension: None,
@@ -133,7 +153,18 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
             hex::encode(hash)
         };
 
-        let document = Document::new(import_doc.content, source, tags.clone(), checksum, metadata);
+        // Merge CLI tags with JSON file tags
+        let mut doc_tags = tags.clone();
+        for tag_str in &import_doc.tags {
+            if let Ok(tag) = tag_str.parse::<Tag>() {
+                // Avoid duplicates
+                if !doc_tags.iter().any(|t| t.to_string() == tag.to_string()) {
+                    doc_tags.push(tag);
+                }
+            }
+        }
+
+        let document = Document::new(import_doc.content, source, doc_tags, checksum, metadata);
 
         // Chunk document
         let chunks = chunker.chunk(&document);
