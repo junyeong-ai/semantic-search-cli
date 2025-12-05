@@ -10,7 +10,7 @@ mod tags;
 
 pub use config::ConfigCommand;
 pub use import::ImportArgs;
-pub use index::IndexArgs;
+pub use index::IndexCommand;
 pub use search::SearchArgs;
 pub use source::SourceCommand;
 pub use tags::TagsCommand;

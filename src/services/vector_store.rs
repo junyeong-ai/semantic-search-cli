@@ -337,6 +337,39 @@ impl VectorStoreClient {
         Ok(())
     }
 
+    pub async fn clear_collection(&self) -> Result<(), VectorStoreError> {
+        if self.get_collection_info().await?.is_none() {
+            return Ok(());
+        }
+
+        self.client
+            .delete_collection(&self.collection)
+            .await
+            .map_err(|e| VectorStoreError::DeleteError(e.to_string()))?;
+
+        self.create_collection().await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_by_source_type(&self, source_type: SourceType) -> Result<(), VectorStoreError> {
+        let source_type_str = source_type.to_string();
+        let source_tag = format!("source:{}", source_type_str);
+
+        let filter = Filter::should([
+            Condition::matches("source_type", source_type_str),
+            Condition::matches("tags", source_tag),
+        ]);
+        let delete = DeletePointsBuilder::new(&self.collection).points(filter);
+
+        self.client
+            .delete_points(delete)
+            .await
+            .map_err(|e| VectorStoreError::DeleteError(e.to_string()))?;
+
+        Ok(())
+    }
+
     pub fn collection(&self) -> &str {
         &self.collection
     }

@@ -43,8 +43,8 @@ async fn run_command(
         Commands::Status => {
             handle_status(format, verbose).await?;
         }
-        Commands::Index(args) => {
-            handle_index(args, format, verbose).await?;
+        Commands::Index(cmd) => {
+            handle_index(cmd, format, verbose).await?;
         }
         Commands::Search(args) => {
             handle_search(args, format, verbose).await?;

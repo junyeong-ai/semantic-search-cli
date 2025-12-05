@@ -1,62 +1,107 @@
 //! Index command implementation.
 
 use anyhow::{Context, Result};
-use clap::Args;
+use clap::Subcommand;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use walkdir::WalkDir;
 
 use crate::cli::output::{IndexStats, get_formatter};
-use crate::models::{Config, Document, DocumentMetadata, OutputFormat, Source, Tag, parse_tags};
+use crate::models::{Config, Document, DocumentMetadata, OutputFormat, Source, SourceType, Tag, parse_tags};
 use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
 use crate::utils::file::{calculate_checksum, is_text_file, read_file_content};
 
-/// Arguments for the index command.
-#[derive(Debug, Args)]
-pub struct IndexArgs {
-    /// Path to directory or file to index
-    #[arg(required = true)]
-    pub path: PathBuf,
+#[derive(Debug, Subcommand)]
+pub enum IndexCommand {
+    /// Add files or directories to the search index
+    Add {
+        /// Path to directory or file to index
+        #[arg(required = true)]
+        path: PathBuf,
 
-    /// Tags to apply to indexed documents (comma-separated, format: key:value)
-    #[arg(long, short = 't')]
-    pub tags: Option<String>,
+        /// Tags to apply to indexed documents (comma-separated, format: key:value)
+        #[arg(long, short = 't')]
+        tags: Option<String>,
 
-    /// File patterns to exclude (can be specified multiple times)
-    #[arg(long, short = 'e')]
-    pub exclude: Vec<String>,
+        /// File patterns to exclude (can be specified multiple times)
+        #[arg(long, short = 'e')]
+        exclude: Vec<String>,
 
-    /// Show what would be indexed without actually indexing
-    #[arg(long)]
-    pub dry_run: bool,
+        /// Show what would be indexed without actually indexing
+        #[arg(long)]
+        dry_run: bool,
 
-    /// Force re-indexing of all files (ignore checksums)
-    #[arg(long)]
-    pub force: bool,
+        /// Force re-indexing of all files (ignore checksums)
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Delete indexed documents by path
+    Delete {
+        /// Path to file or directory to remove from index
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Show what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        force: bool,
+    },
+
+    /// Clear all indexed documents
+    Clear {
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        force: bool,
+    },
 }
 
-/// Handle the index command.
-pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) -> Result<()> {
+pub async fn handle_index(cmd: IndexCommand, format: OutputFormat, verbose: bool) -> Result<()> {
+    match cmd {
+        IndexCommand::Add {
+            path,
+            tags,
+            exclude,
+            dry_run,
+            force: _,
+        } => handle_add(path, tags, exclude, dry_run, format, verbose).await,
+        IndexCommand::Delete {
+            path,
+            dry_run,
+            force,
+        } => handle_delete(path, dry_run, force, format, verbose).await,
+        IndexCommand::Clear { force } => handle_clear(force, format, verbose).await,
+    }
+}
+
+async fn handle_add(
+    path: PathBuf,
+    tags: Option<String>,
+    exclude: Vec<String>,
+    dry_run: bool,
+    format: OutputFormat,
+    verbose: bool,
+) -> Result<()> {
     let config = Config::load()?;
     let formatter = get_formatter(format);
     let start_time = Instant::now();
 
-    // Parse tags
-    let tags: Vec<Tag> = if let Some(ref tag_str) = args.tags {
+    let tags: Vec<Tag> = if let Some(ref tag_str) = tags {
         parse_tags(tag_str).context("failed to parse tags")?
     } else {
         Vec::new()
     };
 
-    // Validate path
-    let path = args.path.canonicalize().context("invalid path")?;
+    let path = path.canonicalize().context("invalid path")?;
     if !path.exists() {
         anyhow::bail!("path does not exist: {}", path.display());
     }
 
-    // Collect files to index
-    let files = collect_files(&path, &args.exclude, &config.indexing.exclude_patterns)?;
+    let files = collect_files(&path, &exclude, &config.indexing.exclude_patterns)?;
 
     if files.is_empty() {
         println!("{}", formatter.format_message("No files found to index."));
@@ -67,7 +112,7 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
         println!("Found {} files to process", files.len());
     }
 
-    if args.dry_run {
+    if dry_run {
         println!(
             "{}",
             formatter.format_message(&format!("Dry run: Would index {} files", files.len()))
@@ -78,17 +123,12 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
         return Ok(());
     }
 
-    // Initialize clients
     let embedding_client = EmbeddingClient::new(&config.embedding)?;
     let vector_client = VectorStoreClient::new(&config.vector_store).await?;
-
-    // Ensure collection exists
     vector_client.create_collection().await?;
 
-    // Create chunker
     let chunker = TextChunker::new(&config.indexing);
 
-    // Setup progress bar
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -104,7 +144,6 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
         ..Default::default()
     };
 
-    // Process files in batches
     let batch_size = config.embedding.batch_size as usize;
     let mut pending_chunks = Vec::new();
     let mut pending_texts = Vec::new();
@@ -112,13 +151,11 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
     for file_path in &files {
         pb.inc(1);
 
-        // Check if file is text
         if !is_text_file(file_path) {
             stats.files_skipped += 1;
             continue;
         }
 
-        // Read file content
         let content = match read_file_content(file_path, config.indexing.max_file_size) {
             Ok(c) => c,
             Err(e) => {
@@ -135,10 +172,7 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
             continue;
         }
 
-        // Calculate checksum
         let checksum = calculate_checksum(&content);
-
-        // Create document
         let source = Source::local(file_path.to_string_lossy().to_string());
         let metadata = DocumentMetadata {
             filename: file_path
@@ -153,8 +187,6 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
         };
 
         let document = Document::new(content, source, tags.clone(), checksum, metadata);
-
-        // Chunk document
         let chunks = chunker.chunk(&document);
         stats.chunks_created += chunks.len() as u64;
         stats.files_indexed += 1;
@@ -164,7 +196,6 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
             pending_chunks.push(chunk);
         }
 
-        // Process batch if full
         if pending_texts.len() >= batch_size {
             process_batch(
                 &embedding_client,
@@ -176,7 +207,6 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
         }
     }
 
-    // Process remaining chunks
     if !pending_texts.is_empty() {
         process_batch(
             &embedding_client,
@@ -188,15 +218,117 @@ pub async fn handle_index(args: IndexArgs, format: OutputFormat, verbose: bool) 
     }
 
     pb.finish_and_clear();
-
     stats.duration_ms = start_time.elapsed().as_millis() as u64;
-
     print!("{}", formatter.format_index_stats(&stats));
 
     Ok(())
 }
 
-/// Collect files to index from the given path.
+async fn handle_delete(
+    path: PathBuf,
+    dry_run: bool,
+    force: bool,
+    format: OutputFormat,
+    verbose: bool,
+) -> Result<()> {
+    let config = Config::load()?;
+    let formatter = get_formatter(format);
+
+    let path = path.canonicalize().context("invalid path")?;
+    let path_str = path.to_string_lossy().to_string();
+
+    if verbose {
+        println!("Deleting indexed documents for: {}", path_str);
+    }
+
+    if dry_run {
+        println!(
+            "{}",
+            formatter.format_message(&format!("Dry run: Would delete documents matching '{}'", path_str))
+        );
+        return Ok(());
+    }
+
+    if !force {
+        println!(
+            "This will delete all indexed documents matching '{}'. Continue? [y/N]",
+            path_str
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("{}", formatter.format_message("Cancelled."));
+            return Ok(());
+        }
+    }
+
+    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+
+    let files = if path.is_file() {
+        vec![path.clone()]
+    } else {
+        collect_files(&path, &[], &[])?
+    };
+
+    if files.is_empty() {
+        println!("{}", formatter.format_message("No documents to delete."));
+        return Ok(());
+    }
+
+    let document_ids: Vec<String> = files
+        .iter()
+        .map(|p| {
+            let source = Source {
+                source_type: SourceType::Local,
+                location: p.to_string_lossy().to_string(),
+                url: None,
+            };
+            Document::generate_id(&source)
+        })
+        .collect();
+
+    vector_client.delete_by_document_ids(&document_ids).await?;
+
+    println!(
+        "{}",
+        formatter.format_message(&format!(
+            "Deleted {} document(s) from index",
+            files.len()
+        ))
+    );
+
+    Ok(())
+}
+
+async fn handle_clear(force: bool, format: OutputFormat, verbose: bool) -> Result<()> {
+    let config = Config::load()?;
+    let formatter = get_formatter(format);
+
+    if verbose {
+        println!("Clearing all indexed documents...");
+    }
+
+    if !force {
+        println!("This will delete ALL indexed documents. Continue? [y/N]");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("{}", formatter.format_message("Cancelled."));
+            return Ok(());
+        }
+    }
+
+    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    vector_client.clear_collection().await?;
+
+    println!(
+        "{}",
+        formatter.format_message("All indexed documents have been cleared.")
+    );
+
+    Ok(())
+}
+
 fn collect_files(
     path: &PathBuf,
     exclude: &[String],
@@ -217,7 +349,6 @@ fn collect_files(
             continue;
         }
 
-        // Check exclusions
         let path_str = entry_path.to_string_lossy();
         let mut excluded = false;
 
@@ -239,7 +370,6 @@ fn collect_files(
     Ok(files)
 }
 
-/// Detect programming language from file extension.
 fn detect_language(path: &Path) -> Option<String> {
     path.extension().and_then(|ext| {
         let ext = ext.to_string_lossy().to_lowercase();
