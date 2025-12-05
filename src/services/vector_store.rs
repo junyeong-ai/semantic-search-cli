@@ -292,9 +292,9 @@ impl VectorStoreClient {
         Ok(search_results)
     }
 
-    pub async fn delete_by_tags(&self, tags: &[Tag]) -> Result<u64, VectorStoreError> {
+    pub async fn delete_by_tags(&self, tags: &[Tag]) -> Result<(), VectorStoreError> {
         if tags.is_empty() {
-            return Ok(0);
+            return Ok(());
         }
 
         let filter_conditions: Vec<Condition> = tags
@@ -310,7 +310,7 @@ impl VectorStoreClient {
             .await
             .map_err(|e| VectorStoreError::DeleteError(e.to_string()))?;
 
-        Ok(0)
+        Ok(())
     }
 
     pub async fn delete_by_document_ids(
