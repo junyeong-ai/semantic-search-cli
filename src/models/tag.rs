@@ -121,9 +121,9 @@ pub fn parse_tags(s: &str) -> Result<Vec<Tag>, TagError> {
         return Ok(Vec::new());
     }
     s.split(',')
-        .map(|t| t.trim())
+        .map(str::trim)
         .filter(|t| !t.is_empty())
-        .map(|t| t.parse::<Tag>())
+        .map(str::parse)
         .collect()
 }
 

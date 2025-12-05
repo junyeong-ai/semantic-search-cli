@@ -101,10 +101,8 @@ fn detect_language(path: &Path) -> Option<String> {
         match ext.as_str() {
             "rs" => Some("rust"),
             "py" => Some("python"),
-            "js" => Some("javascript"),
-            "ts" => Some("typescript"),
-            "jsx" => Some("javascript"),
-            "tsx" => Some("typescript"),
+            "js" | "jsx" => Some("javascript"),
+            "ts" | "tsx" => Some("typescript"),
             "go" => Some("go"),
             "java" => Some("java"),
             "kt" | "kts" => Some("kotlin"),

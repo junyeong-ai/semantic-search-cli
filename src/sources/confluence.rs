@@ -123,8 +123,7 @@ impl ConfluenceSource {
                 item.content
                     .content_type
                     .as_deref()
-                    .map(|t| t == "page")
-                    .unwrap_or(true)
+                    .is_none_or(|t| t == "page")
             })
             .map(|item| item.content.id.clone())
             .filter(|id| !excluded_ids.contains(id))
@@ -218,15 +217,14 @@ impl ConfluenceSource {
 
         let full_content = format!("# {}\n\n{}", page.title, cleaned_content);
 
-        let url = page
-            .links
-            .as_ref()
-            .map(|l| {
+        let url = page.links.as_ref().map_or_else(
+            || page.id.clone(),
+            |l| {
                 let base = l.base.as_deref().unwrap_or("");
                 let webui = l.webui.as_deref().unwrap_or("");
-                format!("{}{}", base, webui)
-            })
-            .unwrap_or_else(|| page.id.clone());
+                format!("{base}{webui}")
+            },
+        );
 
         let source = Source::external(SourceType::Confluence, page.id.clone(), url);
         let checksum = calculate_checksum(&full_content);

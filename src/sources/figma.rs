@@ -119,7 +119,7 @@ impl FigmaSource {
         }
 
         // Extract file structure to get pages
-        let file_key = extract_file_key(query).unwrap_or_else(|| query.to_string());
+        let file_key = extract_file_key(query).unwrap_or_else(|| query.to_owned());
         self.sync_all_pages(&file_key, &options.tags, options.limit)
     }
 

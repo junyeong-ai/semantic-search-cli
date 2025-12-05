@@ -40,8 +40,7 @@ impl Retryable for EmbeddingError {
     fn is_retryable(&self) -> bool {
         match self {
             // Connection and timeout errors are retryable
-            EmbeddingError::ConnectionError(_) => true,
-            EmbeddingError::Timeout => true,
+            EmbeddingError::ConnectionError(_) | EmbeddingError::Timeout => true,
             // Server errors might be transient (e.g., 503 Service Unavailable)
             EmbeddingError::ServerError(msg) => {
                 msg.contains("503")

@@ -192,18 +192,16 @@ impl JiraSource {
         }
 
         // Build URL
-        let url = issue
-            .self_url
-            .as_ref()
-            .map(|u| {
+        let url = issue.self_url.as_ref().map_or_else(
+            || key.clone(),
+            |u| {
                 u.split("/rest/api/")
                     .next()
-                    .map(|base| format!("{}/browse/{}", base, key))
-                    .unwrap_or_else(|| key.to_string())
-            })
-            .unwrap_or_else(|| key.to_string());
+                    .map_or_else(|| key.clone(), |base| format!("{base}/browse/{key}"))
+            },
+        );
 
-        let source = Source::external(SourceType::Jira, key.to_string(), url);
+        let source = Source::external(SourceType::Jira, key.clone(), url);
         let checksum = calculate_checksum(&content);
 
         let metadata = DocumentMetadata {
@@ -277,16 +275,11 @@ fn extract_issue_key(query: &str) -> Option<String> {
 fn is_valid_issue_key(key: &str) -> bool {
     key.contains('-')
         && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        && key
-            .split('-')
-            .next()
-            .map(|p| !p.is_empty())
-            .unwrap_or(false)
+        && key.split('-').next().is_some_and(|p| !p.is_empty())
         && key
             .split('-')
             .nth(1)
-            .map(|n| n.chars().all(|c| c.is_ascii_digit()))
-            .unwrap_or(false)
+            .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Extract plain text from Atlassian Document Format (ADF).
