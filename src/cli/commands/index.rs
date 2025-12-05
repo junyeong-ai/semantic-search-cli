@@ -121,7 +121,7 @@ async fn handle_add(
     }
 
     let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
     vector_client.create_collection().await?;
 
     let chunker = TextChunker::new(&config.indexing);
@@ -262,7 +262,7 @@ async fn handle_delete(
         }
     }
 
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
 
     let files = if path.is_file() {
         vec![path.clone()]
@@ -315,7 +315,7 @@ async fn handle_clear(force: bool, format: OutputFormat, verbose: bool) -> Resul
         }
     }
 
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
     vector_client.clear_collection().await?;
 
     println!(
@@ -373,10 +373,8 @@ fn detect_language(path: &Path) -> Option<String> {
         match ext.as_str() {
             "rs" => Some("rust"),
             "py" => Some("python"),
-            "js" => Some("javascript"),
-            "ts" => Some("typescript"),
-            "jsx" => Some("javascript"),
-            "tsx" => Some("typescript"),
+            "js" | "jsx" => Some("javascript"),
+            "ts" | "tsx" => Some("typescript"),
             "go" => Some("go"),
             "java" => Some("java"),
             "kt" | "kts" => Some("kotlin"),

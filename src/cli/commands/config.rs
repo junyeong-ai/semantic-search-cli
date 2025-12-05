@@ -55,52 +55,49 @@ fn handle_init(formatter: &dyn crate::cli::output::Formatter) -> Result<()> {
 
 fn handle_show(format: OutputFormat) -> Result<()> {
     let config = Config::load()?;
-    let config_path = Config::config_path();
 
-    match format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&config)?;
-            println!("{}", json);
+    if format == OutputFormat::Json {
+        let json = serde_json::to_string_pretty(&config)?;
+        println!("{json}");
+        return Ok(());
+    }
+
+    if let Some(path) = Config::config_path() {
+        println!("Config file: {}\n", path.display());
+    }
+
+    println!("[embedding]");
+    println!("url = \"{}\"", config.embedding.url);
+    println!("timeout_secs = {}", config.embedding.timeout_secs);
+    println!("batch_size = {}", config.embedding.batch_size);
+    println!();
+
+    println!("[vector_store]");
+    println!("url = \"{}\"", config.vector_store.url);
+    println!("collection = \"{}\"", config.vector_store.collection);
+    if config.vector_store.api_key.is_some() {
+        println!("api_key = \"********\"");
+    }
+    println!();
+
+    println!("[indexing]");
+    println!("max_file_size = {}", config.indexing.max_file_size);
+    println!("chunk_size = {}", config.indexing.chunk_size);
+    println!("chunk_overlap = {}", config.indexing.chunk_overlap);
+    if !config.indexing.exclude_patterns.is_empty() {
+        println!("exclude_patterns = [");
+        for pattern in &config.indexing.exclude_patterns {
+            println!("  \"{pattern}\",");
         }
-        _ => {
-            if let Some(path) = config_path {
-                println!("Config file: {}\n", path.display());
-            }
+        println!("]");
+    }
+    println!();
 
-            println!("[embedding]");
-            println!("url = \"{}\"", config.embedding.url);
-            println!("timeout_secs = {}", config.embedding.timeout_secs);
-            println!("batch_size = {}", config.embedding.batch_size);
-            println!();
-
-            println!("[vector_store]");
-            println!("url = \"{}\"", config.vector_store.url);
-            println!("collection = \"{}\"", config.vector_store.collection);
-            if config.vector_store.api_key.is_some() {
-                println!("api_key = \"********\"");
-            }
-            println!();
-
-            println!("[indexing]");
-            println!("max_file_size = {}", config.indexing.max_file_size);
-            println!("chunk_size = {}", config.indexing.chunk_size);
-            println!("chunk_overlap = {}", config.indexing.chunk_overlap);
-            if !config.indexing.exclude_patterns.is_empty() {
-                println!("exclude_patterns = [");
-                for pattern in &config.indexing.exclude_patterns {
-                    println!("  \"{}\",", pattern);
-                }
-                println!("]");
-            }
-            println!();
-
-            println!("[search]");
-            println!("default_limit = {}", config.search.default_limit);
-            println!("default_format = \"{}\"", config.search.default_format);
-            if let Some(score) = config.search.default_min_score {
-                println!("default_min_score = {}", score);
-            }
-        }
+    println!("[search]");
+    println!("default_limit = {}", config.search.default_limit);
+    println!("default_format = \"{}\"", config.search.default_format);
+    if let Some(score) = config.search.default_min_score {
+        println!("default_min_score = {score}");
     }
 
     Ok(())

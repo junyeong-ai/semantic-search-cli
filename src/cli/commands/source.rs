@@ -6,7 +6,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::process::Command;
 use std::time::Instant;
 
-use crate::cli::output::{IndexStats, get_formatter};
+use crate::cli::output::{CliInfo, IndexStats, SourceInfo, get_formatter};
 use crate::models::{Config, OutputFormat, SourceType, Tag, parse_tags};
 use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
 use crate::sources::{SyncOptions, get_data_source};
@@ -87,11 +87,7 @@ pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bo
 }
 
 fn handle_list(formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
-    println!("{}", formatter.format_message("Available Data Sources"));
-    println!("----------------------");
-    println!();
-
-    let sources = [
+    let source_defs: &[(&str, &str, &str)] = &[
         ("jira", "Jira issues via atlassian-cli", "atlassian-cli"),
         (
             "confluence",
@@ -101,65 +97,49 @@ fn handle_list(formatter: &dyn crate::cli::output::Formatter, _verbose: bool) ->
         ("figma", "Figma designs via figma-cli", "figma-cli"),
     ];
 
-    for (name, description, cli) in &sources {
-        let available = check_cli_available(cli);
-        let status = if available { "✓" } else { "✗" };
-        println!("  {} {} - {}", status, name, description);
-        if !available {
-            println!("    CLI not found: {}", cli);
-        }
-    }
+    let sources: Vec<SourceInfo> = source_defs
+        .iter()
+        .map(|&(name, desc, cli)| SourceInfo {
+            name: name.to_owned(),
+            description: desc.to_owned(),
+            available: check_cli_available(cli),
+        })
+        .collect();
 
-    println!();
-    println!(
-        "{}",
-        formatter.format_message("Use 'ssearch source status' to check CLI availability.")
-    );
-    println!(
-        "{}",
-        formatter
-            .format_message("Use 'ssearch source sync <source> --query <query>' to sync data.")
-    );
-
+    print!("{}", formatter.format_sources(&sources));
     Ok(())
 }
 
 fn handle_status(formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
-    println!("{}", formatter.format_message("External CLI Status"));
-    println!("-------------------");
-    println!();
-
-    let clis = [
-        (
-            "atlassian-cli",
-            "For Jira and Confluence integration",
-            "cargo install atlassian-cli",
-        ),
-        (
-            "figma-cli",
-            "For Figma design integration",
-            "cargo install figma-cli",
-        ),
+    let cli_defs: &[(&str, &str)] = &[
+        ("atlassian-cli", "For Jira and Confluence integration"),
+        ("figma-cli", "For Figma design integration"),
     ];
 
-    for (name, description, install_cmd) in &clis {
-        let available = check_cli_available(name);
-        if available {
-            println!("✓ {} - {}", name, description);
-            if let Ok(output) = Command::new(name).arg("--version").output()
-                && output.status.success()
-            {
-                let version = String::from_utf8_lossy(&output.stdout);
-                println!("  Version: {}", version.trim());
+    let clis: Vec<CliInfo> = cli_defs
+        .iter()
+        .map(|&(name, desc)| {
+            let available = check_cli_available(name);
+            let version = if available {
+                Command::new(name)
+                    .arg("--version")
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            };
+            CliInfo {
+                name: name.to_owned(),
+                description: desc.to_owned(),
+                available,
+                version,
             }
-        } else {
-            println!("✗ {} - Not installed", name);
-            println!("  {}", description);
-            println!("  Install: {}", install_cmd);
-        }
-        println!();
-    }
+        })
+        .collect();
 
+    print!("{}", formatter.format_cli_status(&clis));
     Ok(())
 }
 
@@ -240,7 +220,7 @@ async fn handle_sync(
     println!("Fetched {} documents, indexing...", documents.len());
 
     let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
     vector_client.create_collection().await?;
 
     let chunker = TextChunker::new(&config.indexing);
@@ -344,7 +324,7 @@ async fn handle_delete(
         }
     }
 
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
     vector_client.delete_by_source_type(source_type).await?;
 
     println!(

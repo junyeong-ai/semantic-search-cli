@@ -49,19 +49,9 @@ async fn handle_list(
     config: &Config,
     _verbose: bool,
 ) -> Result<()> {
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
-
-    // Note: Qdrant doesn't have a direct way to aggregate tags.
-    // This would require scrolling through all points or using a separate index.
-    // For now, we'll show a message about the limitation.
-
-    // In a real implementation, you might want to:
-    // 1. Maintain a separate tags index
-    // 2. Use scroll API to aggregate tags
-    // 3. Store tag counts in a separate collection
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
 
     let info = vector_client.get_collection_info().await?;
-
     if info.is_none() {
         println!(
             "{}",
@@ -70,19 +60,12 @@ async fn handle_list(
         return Ok(());
     }
 
-    // For now, return empty list with a note
-    println!(
-        "{}",
-        formatter.format_message(
-            "Tag aggregation requires scrolling through all points.\n\
-         This feature will be implemented with pagination support."
-        )
-    );
+    let tags = vector_client
+        .list_all_tags()
+        .await
+        .context("failed to list tags")?;
 
-    // Placeholder: would return actual tags
-    let tags: Vec<(String, u64)> = vec![];
     print!("{}", formatter.format_tags(&tags));
-
     Ok(())
 }
 
@@ -127,7 +110,7 @@ async fn handle_delete(
     }
 
     // Delete
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
     vector_client
         .delete_by_tags(std::slice::from_ref(&tag))
         .await

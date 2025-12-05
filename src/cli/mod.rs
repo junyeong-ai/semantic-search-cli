@@ -13,10 +13,15 @@ use crate::models::OutputFormat;
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Cli {
-    #[arg(long, short = 'f', global = true)]
+    #[arg(
+        long,
+        short = 'f',
+        global = true,
+        help = "Output format: text, json, or markdown"
+    )]
     pub format: Option<OutputFormat>,
 
-    #[arg(long, short = 'v', global = true)]
+    #[arg(long, short = 'v', global = true, help = "Enable verbose output")]
     pub verbose: bool,
 
     #[command(subcommand)]

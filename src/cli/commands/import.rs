@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde::Deserialize;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::cli::output::{IndexStats, get_formatter};
@@ -67,7 +67,7 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
     };
 
     // Read input
-    let input = read_input(&args.file)?;
+    let input = read_input(args.file.as_deref())?;
 
     // Parse documents
     let import_docs = parse_import_documents(&input)?;
@@ -97,7 +97,7 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
 
     // Initialize clients
     let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let vector_client = VectorStoreClient::new(&config.vector_store).await?;
+    let vector_client = VectorStoreClient::new(&config.vector_store)?;
 
     // Ensure collection exists
     vector_client.create_collection().await?;
@@ -131,9 +131,11 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
             .source_type
             .as_deref()
             .and_then(|st| st.parse::<SourceType>().ok())
-            .filter(|t| t.is_external())
-            .map(|source_type| Source::external(source_type, &import_doc.url, &import_doc.url))
-            .unwrap_or_else(|| Source::custom(&import_doc.url));
+            .filter(SourceType::is_external)
+            .map_or_else(
+                || Source::custom(&import_doc.url),
+                |source_type| Source::external(source_type, &import_doc.url, &import_doc.url),
+            );
         let metadata = DocumentMetadata {
             filename: None,
             extension: None,
@@ -202,7 +204,7 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
 }
 
 /// Read input from file or stdin.
-fn read_input(file: &Option<PathBuf>) -> Result<String> {
+fn read_input(file: Option<&Path>) -> Result<String> {
     match file {
         Some(path) if path.to_string_lossy() != "-" => {
             std::fs::read_to_string(path).context("failed to read file")
