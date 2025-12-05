@@ -29,8 +29,9 @@ pub enum Commands {
     /// Check infrastructure status (embedding server, Qdrant)
     Status,
 
-    /// Index files for semantic search
-    Index(commands::IndexArgs),
+    /// Manage search index (add, delete, clear)
+    #[command(subcommand)]
+    Index(commands::IndexCommand),
 
     /// Search indexed content
     Search(commands::SearchArgs),
