@@ -46,7 +46,13 @@ pub async fn handle_search(args: SearchArgs, format: OutputFormat, verbose: bool
     if limit == 0 {
         anyhow::bail!("limit must be at least 1");
     }
+
     let min_score = args.min_score.or(config.search.default_min_score);
+    if let Some(score) = min_score
+        && !(0.0..=1.0).contains(&score)
+    {
+        anyhow::bail!("min_score must be between 0.0 and 1.0");
+    }
 
     let tags: Vec<Tag> = args
         .tags
