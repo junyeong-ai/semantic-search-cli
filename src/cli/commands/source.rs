@@ -86,8 +86,8 @@ pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bo
     }
 }
 
-fn handle_list(_formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
-    println!("Available Data Sources");
+fn handle_list(formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
+    println!("{}", formatter.format_message("Available Data Sources"));
     println!("----------------------");
     println!();
 
@@ -111,14 +111,21 @@ fn handle_list(_formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -
     }
 
     println!();
-    println!("Use 'ssearch source status' to check CLI availability.");
-    println!("Use 'ssearch source sync <source> --query <query>' to sync data.");
+    println!(
+        "{}",
+        formatter.format_message("Use 'ssearch source status' to check CLI availability.")
+    );
+    println!(
+        "{}",
+        formatter
+            .format_message("Use 'ssearch source sync <source> --query <query>' to sync data.")
+    );
 
     Ok(())
 }
 
-fn handle_status(_formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
-    println!("External CLI Status");
+fn handle_status(formatter: &dyn crate::cli::output::Formatter, _verbose: bool) -> Result<()> {
+    println!("{}", formatter.format_message("External CLI Status"));
     println!("-------------------");
     println!();
 

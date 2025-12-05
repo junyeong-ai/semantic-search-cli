@@ -127,18 +127,13 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
         }
 
         // Create document
-        let source = match import_doc.source_type.as_deref() {
-            Some(st)
-                if st
-                    .parse::<SourceType>()
-                    .map(|t| t.is_external())
-                    .unwrap_or(false) =>
-            {
-                let source_type: SourceType = st.parse().unwrap();
-                Source::external(source_type, &import_doc.url, &import_doc.url)
-            }
-            _ => Source::custom(&import_doc.url),
-        };
+        let source = import_doc
+            .source_type
+            .as_deref()
+            .and_then(|st| st.parse::<SourceType>().ok())
+            .filter(|t| t.is_external())
+            .map(|source_type| Source::external(source_type, &import_doc.url, &import_doc.url))
+            .unwrap_or_else(|| Source::custom(&import_doc.url));
         let metadata = DocumentMetadata {
             filename: None,
             extension: None,

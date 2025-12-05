@@ -33,10 +33,6 @@ pub enum IndexCommand {
         /// Show what would be indexed without actually indexing
         #[arg(long)]
         dry_run: bool,
-
-        /// Force re-indexing of all files (ignore checksums)
-        #[arg(long)]
-        force: bool,
     },
 
     /// Delete indexed documents by path
@@ -69,7 +65,6 @@ pub async fn handle_index(cmd: IndexCommand, format: OutputFormat, verbose: bool
             tags,
             exclude,
             dry_run,
-            force: _,
         } => handle_add(path, tags, exclude, dry_run, format, verbose).await,
         IndexCommand::Delete {
             path,
