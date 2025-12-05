@@ -169,11 +169,7 @@ impl TextChunker {
                 }
                 '.' | '!' | '?' => {
                     // Sentence end followed by space or newline
-                    if search_range
-                        .get(i + 1)
-                        .map(|c| c.is_whitespace())
-                        .unwrap_or(false)
-                    {
+                    if search_range.get(i + 1).is_some_and(|c| c.is_whitespace()) {
                         last_sentence = Some(pos + 1);
                     }
                 }
