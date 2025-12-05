@@ -33,7 +33,7 @@ cd embedding-server && python server.py &
 ssearch status
 
 # 4. Index files
-ssearch index ./src
+ssearch index add ./src
 
 # 5. Search! 🎉
 ssearch search "user authentication logic"
@@ -64,10 +64,10 @@ ssearch search "auth logic" --min-score 0.7
 ### File Indexing
 ```bash
 # Index directory
-ssearch index ./src --tags "project:myapp"
+ssearch index add ./src --tags "project:myapp"
 
 # Exclude patterns
-ssearch index . --exclude "node_modules,target,.git"
+ssearch index add . -e "node_modules" -e "target" -e ".git"
 ```
 
 ### External Source Sync
@@ -85,9 +85,9 @@ ssearch source sync figma --query "https://figma.com/design/xxx?node-id=123"
 
 ### Management
 ```bash
-ssearch status          # Check infrastructure status
-ssearch tags list       # List tags
-ssearch clear --confirm # Delete all data
+ssearch status            # Check infrastructure status
+ssearch tags list         # List tags
+ssearch index clear -y    # Delete all data
 ```
 
 ---
@@ -192,11 +192,16 @@ default_format = "text"  # text, json, markdown
 | Command | Description |
 |---------|-------------|
 | `search <query>` | Semantic search |
-| `index <path>` | Index files |
+| `index add <path>` | Index files |
+| `index delete <path>` | Delete from index |
+| `index clear` | Clear all index |
 | `source sync <type>` | Sync external source |
+| `source list` | List sources |
+| `source delete <type>` | Delete by source |
 | `status` | Check infrastructure status |
 | `tags list` | List tags |
-| `clear` | Delete data |
+| `tags delete <tag>` | Delete by tag |
+| `import <file>` | Import JSON/JSONL |
 | `config init` | Initialize config |
 | `config show` | Show current config |
 | `config edit` | Edit config file |
