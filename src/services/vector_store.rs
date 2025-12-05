@@ -1,7 +1,8 @@
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
-    Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct,
-    SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
+    Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
+    PayloadIncludeSelector, PointStruct, ScrollPointsBuilder, SearchPointsBuilder,
+    UpsertPointsBuilder, VectorParamsBuilder,
 };
 use std::collections::HashMap;
 
@@ -16,7 +17,7 @@ pub struct VectorStoreClient {
 }
 
 impl VectorStoreClient {
-    pub async fn new(config: &VectorStoreConfig) -> Result<Self, VectorStoreError> {
+    pub fn new(config: &VectorStoreConfig) -> Result<Self, VectorStoreError> {
         let mut builder = Qdrant::from_url(&config.url);
 
         if let Some(ref api_key) = config.api_key {
@@ -33,8 +34,8 @@ impl VectorStoreClient {
         })
     }
 
-    pub async fn with_defaults() -> Result<Self, VectorStoreError> {
-        Self::new(&VectorStoreConfig::default()).await
+    pub fn with_defaults() -> Result<Self, VectorStoreError> {
+        Self::new(&VectorStoreConfig::default())
     }
 
     pub async fn health_check(&self) -> Result<bool, VectorStoreError> {
@@ -48,10 +49,7 @@ impl VectorStoreClient {
     pub async fn get_collection_info(&self) -> Result<Option<CollectionInfo>, VectorStoreError> {
         match self.client.collection_info(&self.collection).await {
             Ok(info) => Ok(Some(CollectionInfo {
-                points_count: info
-                    .result
-                    .map(|r| r.points_count.unwrap_or(0))
-                    .unwrap_or(0),
+                points_count: info.result.map_or(0, |r| r.points_count.unwrap_or(0)),
             })),
             Err(e) => {
                 let msg = e.to_string();
@@ -90,7 +88,10 @@ impl VectorStoreClient {
             .map(|chunk| {
                 let mut payload: HashMap<String, qdrant_client::qdrant::Value> = HashMap::new();
                 payload.insert("document_id".to_string(), chunk.document_id.into());
-                payload.insert("chunk_index".to_string(), (chunk.chunk_index as i64).into());
+                payload.insert(
+                    "chunk_index".to_string(),
+                    i64::from(chunk.chunk_index).into(),
+                );
                 payload.insert("content".to_string(), chunk.content.into());
                 payload.insert(
                     "source_type".to_string(),
@@ -111,10 +112,10 @@ impl VectorStoreClient {
                 payload.insert("tags".to_string(), tag_strings.into());
 
                 if let Some(line_start) = chunk.line_start {
-                    payload.insert("line_start".to_string(), (line_start as i64).into());
+                    payload.insert("line_start".to_string(), i64::from(line_start).into());
                 }
                 if let Some(line_end) = chunk.line_end {
-                    payload.insert("line_end".to_string(), (line_end as i64).into());
+                    payload.insert("line_end".to_string(), i64::from(line_end).into());
                 }
 
                 PointStruct::new(chunk.id, chunk.dense_vector, payload)
@@ -139,21 +140,7 @@ impl VectorStoreClient {
         source_types: &[SourceType],
         min_score: Option<f32>,
     ) -> Result<Vec<SearchResult>, VectorStoreError> {
-        let mut filter_conditions = Vec::new();
-
-        for tag in tags {
-            filter_conditions.push(Condition::matches("tags", tag.to_payload_string()));
-        }
-
-        for st in source_types {
-            filter_conditions.push(Condition::matches("source_type", st.to_string()));
-        }
-
-        let filter = if filter_conditions.is_empty() {
-            None
-        } else {
-            Some(Filter::must(filter_conditions))
-        };
+        let filter = Self::build_search_filter(tags, source_types);
 
         let mut search_builder =
             SearchPointsBuilder::new(&self.collection, query_vector, limit).with_payload(true);
@@ -281,8 +268,6 @@ impl VectorStoreClient {
                     source,
                     tags,
                     location,
-                    context_before: None,
-                    context_after: None,
                     line_start,
                     line_end,
                 }
@@ -375,6 +360,83 @@ impl VectorStoreClient {
 
     pub fn collection(&self) -> &str {
         &self.collection
+    }
+
+    pub async fn list_all_tags(&self) -> Result<Vec<(String, u64)>, VectorStoreError> {
+        let mut tag_counts: HashMap<String, u64> = HashMap::new();
+        let mut offset: Option<qdrant_client::qdrant::PointId> = None;
+        let batch_size = 100u32;
+
+        loop {
+            let mut scroll_builder = ScrollPointsBuilder::new(&self.collection)
+                .limit(batch_size)
+                .with_payload(PayloadIncludeSelector {
+                    fields: vec!["tags".to_string()],
+                })
+                .with_vectors(false);
+
+            if let Some(off) = offset {
+                scroll_builder = scroll_builder.offset(off);
+            }
+
+            let response = self
+                .client
+                .scroll(scroll_builder)
+                .await
+                .map_err(|e| VectorStoreError::SearchError(e.to_string()))?;
+
+            let points = response.result;
+            if points.is_empty() {
+                break;
+            }
+
+            for point in &points {
+                let Some(tags_value) = point.payload.get("tags") else {
+                    continue;
+                };
+                let Some(qdrant_client::qdrant::value::Kind::ListValue(list)) = &tags_value.kind
+                else {
+                    continue;
+                };
+                for v in &list.values {
+                    if let Some(qdrant_client::qdrant::value::Kind::StringValue(tag_str)) = &v.kind
+                    {
+                        *tag_counts.entry(tag_str.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+
+            offset = response.next_page_offset;
+            if offset.is_none() {
+                break;
+            }
+        }
+
+        let mut tags: Vec<(String, u64)> = tag_counts.into_iter().collect();
+        tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(tags)
+    }
+
+    fn build_search_filter(tags: &[Tag], source_types: &[SourceType]) -> Option<Filter> {
+        let mut must_conditions: Vec<Condition> = Vec::new();
+
+        for tag in tags {
+            must_conditions.push(Condition::matches("tags", tag.to_payload_string()));
+        }
+
+        if !source_types.is_empty() {
+            let source_conditions: Vec<Condition> = source_types
+                .iter()
+                .map(|st| Condition::matches("source_type", st.to_string()))
+                .collect();
+            must_conditions.push(Filter::should(source_conditions).into());
+        }
+
+        if must_conditions.is_empty() {
+            None
+        } else {
+            Some(Filter::must(must_conditions))
+        }
     }
 }
 
