@@ -6,22 +6,13 @@ use crate::models::{OutputFormat, SearchResults};
 
 /// Trait for formatting output.
 pub trait Formatter {
-    /// Format search results.
     fn format_search_results(&self, results: &SearchResults) -> String;
-
-    /// Format a status message.
     fn format_status(&self, status: &StatusInfo) -> String;
-
-    /// Format indexing statistics.
     fn format_index_stats(&self, stats: &IndexStats) -> String;
-
-    /// Format tags list.
     fn format_tags(&self, tags: &[(String, u64)]) -> String;
-
-    /// Format a simple message.
+    fn format_sources(&self, sources: &[SourceInfo]) -> String;
+    fn format_cli_status(&self, clis: &[CliInfo]) -> String;
     fn format_message(&self, message: &str) -> String;
-
-    /// Format an error message.
     fn format_error(&self, error: &str) -> String;
 }
 
@@ -47,6 +38,23 @@ pub struct IndexStats {
     pub duration_ms: u64,
 }
 
+/// Data source information.
+#[derive(Debug, Clone)]
+pub struct SourceInfo {
+    pub name: String,
+    pub description: String,
+    pub available: bool,
+}
+
+/// CLI tool status information.
+#[derive(Debug, Clone)]
+pub struct CliInfo {
+    pub name: String,
+    pub description: String,
+    pub available: bool,
+    pub version: Option<String>,
+}
+
 /// Text formatter for human-readable output.
 pub struct TextFormatter;
 
@@ -69,7 +77,7 @@ impl Formatter for TextFormatter {
             writeln!(output, "{}. [Score: {:.3}]", i + 1, result.score).unwrap();
             writeln!(output, "   Location: {}", result.location).unwrap();
             if !result.tags.is_empty() {
-                let tags: Vec<String> = result.tags.iter().map(|t| t.to_string()).collect();
+                let tags: Vec<String> = result.tags.iter().map(ToString::to_string).collect();
                 writeln!(output, "   Tags: {}", tags.join(", ")).unwrap();
             }
             writeln!(output, "   ---").unwrap();
@@ -159,6 +167,35 @@ impl Formatter for TextFormatter {
         output
     }
 
+    fn format_sources(&self, sources: &[SourceInfo]) -> String {
+        let mut output = String::new();
+        writeln!(output, "Available Data Sources").unwrap();
+        writeln!(output, "----------------------").unwrap();
+        for src in sources {
+            let status = if src.available { "✓" } else { "✗" };
+            writeln!(output, "  {} {} - {}", status, src.name, src.description).unwrap();
+        }
+        output
+    }
+
+    fn format_cli_status(&self, clis: &[CliInfo]) -> String {
+        let mut output = String::new();
+        writeln!(output, "External CLI Status").unwrap();
+        writeln!(output, "-------------------").unwrap();
+        for cli in clis {
+            if cli.available {
+                writeln!(output, "✓ {} - {}", cli.name, cli.description).unwrap();
+                if let Some(ref ver) = cli.version {
+                    writeln!(output, "  Version: {}", ver).unwrap();
+                }
+            } else {
+                writeln!(output, "✗ {} - Not installed", cli.name).unwrap();
+                writeln!(output, "  {}", cli.description).unwrap();
+            }
+        }
+        output
+    }
+
     fn format_message(&self, message: &str) -> String {
         format!("{}\n", message)
     }
@@ -234,6 +271,45 @@ impl Formatter for JsonFormatter {
                 serde_json::json!({
                     "tag": tag,
                     "count": count,
+                })
+            })
+            .collect();
+
+        if self.pretty {
+            serde_json::to_string_pretty(&json).unwrap()
+        } else {
+            serde_json::to_string(&json).unwrap()
+        }
+    }
+
+    fn format_sources(&self, sources: &[SourceInfo]) -> String {
+        let json: Vec<serde_json::Value> = sources
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "description": s.description,
+                    "available": s.available,
+                })
+            })
+            .collect();
+
+        if self.pretty {
+            serde_json::to_string_pretty(&json).unwrap()
+        } else {
+            serde_json::to_string(&json).unwrap()
+        }
+    }
+
+    fn format_cli_status(&self, clis: &[CliInfo]) -> String {
+        let json: Vec<serde_json::Value> = clis
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "name": c.name,
+                    "description": c.description,
+                    "available": c.available,
+                    "version": c.version,
                 })
             })
             .collect();
@@ -341,6 +417,38 @@ impl Formatter for MarkdownFormatter {
         writeln!(output, "|-----|-------|").unwrap();
         for (tag, count) in tags {
             writeln!(output, "| `{}` | {} |", tag, count).unwrap();
+        }
+        output
+    }
+
+    fn format_sources(&self, sources: &[SourceInfo]) -> String {
+        let mut output = String::new();
+        writeln!(output, "## Available Data Sources\n").unwrap();
+        writeln!(output, "| Source | Description | Status |").unwrap();
+        writeln!(output, "|--------|-------------|--------|").unwrap();
+        for src in sources {
+            let status = if src.available { "✅" } else { "❌" };
+            writeln!(
+                output,
+                "| `{}` | {} | {} |",
+                src.name, src.description, status
+            )
+            .unwrap();
+        }
+        output
+    }
+
+    fn format_cli_status(&self, clis: &[CliInfo]) -> String {
+        let mut output = String::new();
+        writeln!(output, "## External CLI Status\n").unwrap();
+        for cli in clis {
+            let status = if cli.available { "✅" } else { "❌" };
+            writeln!(output, "### {} {}\n", cli.name, status).unwrap();
+            writeln!(output, "- **Description:** {}", cli.description).unwrap();
+            if let Some(ref ver) = cli.version {
+                writeln!(output, "- **Version:** {}", ver).unwrap();
+            }
+            writeln!(output).unwrap();
         }
         output
     }

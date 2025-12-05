@@ -44,26 +44,12 @@ impl std::fmt::Display for OutputFormat {
 /// User's search request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
-    /// Natural language query text
     pub query: String,
-
-    /// Maximum results to return
     pub limit: u32,
-
-    /// Tag filters (AND logic)
     pub tags: Vec<Tag>,
-
-    /// Source type filters (OR logic)
     pub source_types: Vec<SourceType>,
-
-    /// Output format preference
     pub format: OutputFormat,
-
-    /// Minimum similarity threshold (0.0-1.0)
     pub min_score: Option<f32>,
-
-    /// Whether to include context around matches
-    pub include_context: bool,
 }
 
 impl Default for SearchQuery {
@@ -75,7 +61,6 @@ impl Default for SearchQuery {
             source_types: Vec::new(),
             format: OutputFormat::Text,
             min_score: None,
-            include_context: true,
         }
     }
 }
@@ -90,38 +75,37 @@ impl SearchQuery {
     }
 
     /// Set the result limit.
+    #[must_use]
     pub fn with_limit(mut self, limit: u32) -> Self {
         self.limit = limit;
         self
     }
 
     /// Add tag filters.
+    #[must_use]
     pub fn with_tags(mut self, tags: Vec<Tag>) -> Self {
         self.tags = tags;
         self
     }
 
     /// Add source type filters.
+    #[must_use]
     pub fn with_source_types(mut self, source_types: Vec<SourceType>) -> Self {
         self.source_types = source_types;
         self
     }
 
     /// Set the output format.
+    #[must_use]
     pub fn with_format(mut self, format: OutputFormat) -> Self {
         self.format = format;
         self
     }
 
-    /// Set the minimum score threshold.
+    /// Set the minimum similarity score threshold.
+    #[must_use]
     pub fn with_min_score(mut self, min_score: f32) -> Self {
         self.min_score = Some(min_score);
-        self
-    }
-
-    /// Set whether to include context.
-    pub fn with_context(mut self, include: bool) -> Self {
-        self.include_context = include;
         self
     }
 }
@@ -129,31 +113,12 @@ impl SearchQuery {
 /// A single search result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
-    /// Matching chunk ID
     pub chunk_id: String,
-
-    /// Similarity score (0.0-1.0)
     pub score: f32,
-
-    /// Chunk content
     pub content: String,
-
-    /// Source information
     pub source: Source,
-
-    /// Associated tags
     pub tags: Vec<Tag>,
-
-    /// Location hint (file path, line numbers, or URL)
     pub location: String,
-
-    /// Context before matched content
-    pub context_before: Option<String>,
-
-    /// Context after matched content
-    pub context_after: Option<String>,
-
-    /// Line numbers if available
     pub line_start: Option<u32>,
     pub line_end: Option<u32>,
 }
