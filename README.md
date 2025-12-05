@@ -33,7 +33,7 @@ cd embedding-server && python server.py &
 ssearch status
 
 # 4. 파일 인덱싱
-ssearch index ./src
+ssearch index add ./src
 
 # 5. 검색! 🎉
 ssearch search "사용자 인증 로직"
@@ -64,10 +64,10 @@ ssearch search "인증 로직" --min-score 0.7
 ### 파일 인덱싱
 ```bash
 # 디렉토리 인덱싱
-ssearch index ./src --tags "project:myapp"
+ssearch index add ./src --tags "project:myapp"
 
 # 특정 패턴 제외
-ssearch index . --exclude "node_modules,target,.git"
+ssearch index add . -e "node_modules" -e "target" -e ".git"
 ```
 
 ### 외부 소스 동기화
@@ -85,9 +85,9 @@ ssearch source sync figma --query "https://figma.com/design/xxx?node-id=123"
 
 ### 관리
 ```bash
-ssearch status          # 인프라 상태 확인
-ssearch tags list       # 태그 목록
-ssearch clear --confirm # 전체 데이터 삭제
+ssearch status            # 인프라 상태 확인
+ssearch tags list         # 태그 목록
+ssearch index clear -y    # 전체 데이터 삭제
 ```
 
 ---
@@ -192,11 +192,16 @@ default_format = "text"  # text, json, markdown
 | 명령어 | 설명 |
 |--------|------|
 | `search <query>` | 시맨틱 검색 |
-| `index <path>` | 파일 인덱싱 |
+| `index add <path>` | 파일 인덱싱 |
+| `index delete <path>` | 인덱스에서 삭제 |
+| `index clear` | 전체 인덱스 삭제 |
 | `source sync <type>` | 외부 소스 동기화 |
+| `source list` | 소스 목록 |
+| `source delete <type>` | 소스별 데이터 삭제 |
 | `status` | 인프라 상태 확인 |
 | `tags list` | 태그 목록 |
-| `clear` | 데이터 삭제 |
+| `tags delete <tag>` | 태그별 데이터 삭제 |
+| `import <file>` | JSON/JSONL 가져오기 |
 | `config init` | 설정 초기화 |
 | `config show` | 현재 설정 표시 |
 | `config edit` | 설정 파일 편집 |

@@ -11,10 +11,10 @@ allowed-tools: Bash
 
 ```bash
 # Search indexed documents
-ssearch search <query> [--limit N] [--tags "key:value"] [--format plain|json|markdown]
+ssearch search <query> [--limit N] [--tags "key:value"] [--source type] [--format text|json|markdown]
 
 # Index local files
-ssearch index <path> [--tags "key:value"] [--exclude "pattern"]
+ssearch index add <path> [--tags "key:value"] [-e "pattern"]
 
 # Sync external sources
 ssearch source sync <type> --query "<query>" [--limit N] [--tags "key:value"]
@@ -22,7 +22,9 @@ ssearch source sync <type> --query "<query>" [--limit N] [--tags "key:value"]
 # Management
 ssearch status                    # Check infrastructure health
 ssearch tags list                 # List all indexed tags
-ssearch clear --confirm           # Clear all indexed data
+ssearch index clear -y            # Clear all indexed data
+ssearch source delete <type> -y   # Delete by source type
+ssearch tags delete <tag> -y      # Delete by tag
 ```
 
 ## Search Examples
@@ -30,7 +32,7 @@ ssearch clear --confirm           # Clear all indexed data
 ```bash
 ssearch search "authentication flow"
 ssearch search "payment API" --tags "source:confluence" --limit 5
-ssearch search "user login" --format json
+ssearch search "user login" --source jira,confluence --format json
 ```
 
 ## External Source Types
