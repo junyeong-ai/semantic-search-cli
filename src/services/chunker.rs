@@ -1,6 +1,7 @@
 //! Text chunking with overlap for optimal embedding.
 
 use crate::models::{Document, DocumentChunk, IndexingConfig};
+use crate::utils::has_meaningful_content;
 
 /// Text chunker that splits documents into overlapping chunks.
 #[derive(Debug, Clone)]
@@ -50,7 +51,12 @@ impl TextChunker {
             )];
         }
 
-        let chunks = self.split_with_overlap(content);
+        let chunks: Vec<_> = self
+            .split_with_overlap(content)
+            .into_iter()
+            .filter(|(chunk_content, _, _, _, _)| has_meaningful_content(chunk_content))
+            .collect();
+
         let total_chunks = chunks.len() as u32;
 
         chunks
