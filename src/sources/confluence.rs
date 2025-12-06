@@ -8,6 +8,7 @@ use crate::error::SourceError;
 use crate::models::{Document, DocumentMetadata, Source, SourceType, Tag};
 use crate::sources::SyncOptions;
 use crate::utils::file::{calculate_checksum, sanitize_filename};
+use crate::utils::has_meaningful_content;
 
 #[derive(Debug, Deserialize)]
 struct SearchResultItem {
@@ -283,8 +284,6 @@ fn is_valid_page_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())
 }
 
-const MIN_CONTENT_LENGTH: usize = 50;
-
 static RE_MACRO_METADATA: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\|[^|\n]*[^\s|]{500,}[^|\n]*\|").unwrap());
 static RE_EMPTY_TABLE_ROW: LazyLock<Regex> =
@@ -296,10 +295,6 @@ fn clean_markdown(content: &str) -> String {
     let cleaned = RE_EMPTY_TABLE_ROW.replace_all(&cleaned, "");
     let cleaned = RE_MULTI_BLANK_LINES.replace_all(&cleaned, "\n\n");
     cleaned.trim().to_string()
-}
-
-fn has_meaningful_content(content: &str) -> bool {
-    content.chars().filter(|c| !c.is_whitespace()).count() >= MIN_CONTENT_LENGTH
 }
 
 #[cfg(test)]
@@ -323,17 +318,6 @@ mod tests {
         assert!(cleaned.contains("Title"));
         assert!(cleaned.contains("More content"));
         assert!(!cleaned.contains(&"x".repeat(100)));
-    }
-
-    #[test]
-    fn test_has_meaningful_content() {
-        assert!(!has_meaningful_content(""));
-        assert!(!has_meaningful_content("   \n\n   "));
-        assert!(!has_meaningful_content("short"));
-        assert!(has_meaningful_content(&"a".repeat(50)));
-        assert!(has_meaningful_content(
-            "This is a meaningful piece of content with enough characters."
-        ));
     }
 
     #[test]
