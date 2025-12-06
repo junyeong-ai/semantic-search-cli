@@ -1,5 +1,7 @@
 use std::process::Command;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use serde::Deserialize;
 
 use crate::error::SourceError;
@@ -148,7 +150,7 @@ impl ConfluenceSource {
 
     fn fetch_page(&self, page_id: &str, tags: &[Tag]) -> Result<Document, SourceError> {
         let output = Command::new("atlassian-cli")
-            .args(["confluence", "get", page_id])
+            .args(["confluence", "get", page_id, "--format", "markdown"])
             .output()
             .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
 
@@ -200,17 +202,17 @@ impl ConfluenceSource {
         page: ConfluencePage,
         tags: &[Tag],
     ) -> Result<Document, SourceError> {
-        let html_content = page
+        let raw_content = page
             .body
             .as_ref()
             .and_then(|b| b.storage.as_ref())
             .and_then(|s| s.value.clone())
             .unwrap_or_default();
 
-        let cleaned_content = strip_html_tags(&html_content);
-        if cleaned_content.is_empty() {
+        let cleaned_content = clean_markdown(&raw_content);
+        if !has_meaningful_content(&cleaned_content) {
             return Err(SourceError::ParseError(format!(
-                "page {} has no content",
+                "page {} has no meaningful content",
                 page.id
             )));
         }
@@ -281,78 +283,23 @@ fn is_valid_page_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())
 }
 
-fn strip_html_tags(html: &str) -> String {
-    let mut result = String::with_capacity(html.len());
-    let mut in_tag = false;
-    let mut in_script_or_style = false;
-    let mut last_was_space = false;
+const MIN_CONTENT_LENGTH: usize = 50;
 
-    let lower_html = html.to_lowercase();
-    let chars: Vec<char> = html.chars().collect();
-    let lower_chars: Vec<char> = lower_html.chars().collect();
+static RE_MACRO_METADATA: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\|[^|\n]*[^\s|]{500,}[^|\n]*\|").unwrap());
+static RE_EMPTY_TABLE_ROW: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\|[\s|]*\|[\s|]*$\n?").unwrap());
+static RE_MULTI_BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
 
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
+fn clean_markdown(content: &str) -> String {
+    let cleaned = RE_MACRO_METADATA.replace_all(content, "|");
+    let cleaned = RE_EMPTY_TABLE_ROW.replace_all(&cleaned, "");
+    let cleaned = RE_MULTI_BLANK_LINES.replace_all(&cleaned, "\n\n");
+    cleaned.trim().to_string()
+}
 
-        if c == '<' {
-            let remaining: String = lower_chars[i..].iter().collect();
-            if remaining.starts_with("<script") || remaining.starts_with("<style") {
-                in_script_or_style = true;
-            } else if remaining.starts_with("</script") || remaining.starts_with("</style") {
-                in_script_or_style = false;
-            }
-            in_tag = true;
-        } else if c == '>' {
-            in_tag = false;
-            if i > 0 {
-                let tag_chars: String = lower_chars[..i]
-                    .iter()
-                    .rev()
-                    .take(10)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect();
-                if (tag_chars.contains("/p>")
-                    || tag_chars.contains("/div>")
-                    || tag_chars.contains("/h")
-                    || tag_chars.contains("/li>")
-                    || tag_chars.contains("/br>")
-                    || tag_chars.contains("br/>"))
-                    && !last_was_space
-                    && !result.is_empty()
-                {
-                    result.push('\n');
-                    last_was_space = true;
-                }
-            }
-        } else if !in_tag && !in_script_or_style {
-            if c.is_whitespace() {
-                if !last_was_space && !result.is_empty() {
-                    result.push(' ');
-                    last_was_space = true;
-                }
-            } else {
-                result.push(c);
-                last_was_space = false;
-            }
-        }
-
-        i += 1;
-    }
-
-    result
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-        .replace("&middot;", "·")
-        .trim()
-        .to_string()
+fn has_meaningful_content(content: &str) -> bool {
+    content.chars().filter(|c| !c.is_whitespace()).count() >= MIN_CONTENT_LENGTH
 }
 
 #[cfg(test)]
@@ -367,13 +314,26 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_html_tags() {
-        let html = "<p>Hello <strong>world</strong>!</p><script>alert('test');</script>";
-        let text = strip_html_tags(html);
-        assert!(text.contains("Hello"));
-        assert!(text.contains("world"));
-        assert!(!text.contains("script"));
-        assert!(!text.contains("alert"));
+    fn test_clean_markdown_removes_macro_metadata() {
+        let content = "## Title\n\nSome text\n\n| Header |\n| ---- |\n| abc123def456ghi789"
+            .to_owned()
+            + &"x".repeat(600)
+            + " |\n\nMore content";
+        let cleaned = clean_markdown(&content);
+        assert!(cleaned.contains("Title"));
+        assert!(cleaned.contains("More content"));
+        assert!(!cleaned.contains(&"x".repeat(100)));
+    }
+
+    #[test]
+    fn test_has_meaningful_content() {
+        assert!(!has_meaningful_content(""));
+        assert!(!has_meaningful_content("   \n\n   "));
+        assert!(!has_meaningful_content("short"));
+        assert!(has_meaningful_content(&"a".repeat(50)));
+        assert!(has_meaningful_content(
+            "This is a meaningful piece of content with enough characters."
+        ));
     }
 
     #[test]

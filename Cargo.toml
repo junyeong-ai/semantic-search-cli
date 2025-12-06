@@ -41,6 +41,7 @@ glob = "0.3.3"
 uuid = { version = "1.19", features = ["v5"] }
 indicatif = "0.17.11"
 console = "0.16"
+regex = "1.12.2"
 
 [dev-dependencies]
 criterion = "0.5"
