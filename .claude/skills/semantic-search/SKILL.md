@@ -16,7 +16,11 @@ ssearch search <query> [--limit N] [--tags "key:value"] [--source type] [--forma
 # Index local files
 ssearch index add <path> [--tags "key:value"] [-e "pattern"]
 
-# Sync external sources
+# Sync external sources (full project/space)
+ssearch source sync jira --project <KEY> --all
+ssearch source sync confluence --project <SPACE> --all
+
+# Sync external sources (query-based)
 ssearch source sync <type> --query "<query>" [--limit N] [--tags "key:value"]
 
 # Management
@@ -39,20 +43,27 @@ ssearch search "user login" --source jira,confluence --format json
 
 | Type | Query Format | Examples |
 |------|--------------|----------|
-| `jira` | JQL, issue key, or URL | `project=ABC`, `PROJ-1234`, `https://...atlassian.net/browse/PROJ-1234` |
-| `confluence` | CQL, page ID, or URL | `space=DOCS`, `12345678`, `https://...atlassian.net/wiki/.../pages/123` |
+| `jira` | `--project KEY`, JQL, issue key, or URL | `--project MYPROJ --all`, `PROJ-1234` |
+| `confluence` | `--project SPACE`, CQL, page ID, or URL | `--project DOCS --all`, `12345678` |
 | `figma` | File URL with node-id | `https://figma.com/design/xxx?node-id=123-456` |
 
 ## Sync Examples
 
 ```bash
-# Jira
-ssearch source sync jira --query "project=MYPROJ ORDER BY updated DESC" --limit 20
+# Jira - Full project sync (streaming)
+ssearch source sync jira --project MYPROJ --all
+ssearch source sync jira --project MYPROJ --limit 100
+
+# Jira - Query-based
+ssearch source sync jira --query "status=Done" --limit 20
 ssearch source sync jira --query "PROJ-1234"
 
-# Confluence
-ssearch source sync confluence --query "space=DOCS type=page"
-ssearch source sync confluence --query "https://example.atlassian.net/wiki/spaces/X/pages/12345"
+# Confluence - Full space sync (streaming)
+ssearch source sync confluence --project DOCS --all
+ssearch source sync confluence --project DOCS --limit 100
+
+# Confluence - Query-based
+ssearch source sync confluence --query "text~keyword" --limit 50
 
 # Figma (requires node-id for specific frame)
 ssearch source sync figma --query "https://figma.com/design/abc123?node-id=123-456"

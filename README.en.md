@@ -72,12 +72,20 @@ ssearch index add . -e "node_modules" -e "target" -e ".git"
 
 ### External Source Sync
 ```bash
+# Jira full project sync (streaming)
+ssearch source sync jira --project MYPROJ --all
+ssearch source sync jira --project MYPROJ --limit 100
+
 # Jira issues (JQL or issue key)
-ssearch source sync jira --query "project=MYPROJ" --limit 50
+ssearch source sync jira --query "status=Done" --limit 50
 ssearch source sync jira --query "PROJ-1234"
 
+# Confluence full space sync (streaming)
+ssearch source sync confluence --project DOCS --all
+ssearch source sync confluence --project DOCS --limit 100
+
 # Confluence pages (CQL or page ID/URL)
-ssearch source sync confluence --query "space=DOCS"
+ssearch source sync confluence --query "text~keyword" --limit 50
 
 # Figma designs (URL)
 ssearch source sync figma --query "https://figma.com/design/xxx?node-id=123"

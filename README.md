@@ -72,12 +72,20 @@ ssearch index add . -e "node_modules" -e "target" -e ".git"
 
 ### 외부 소스 동기화
 ```bash
+# Jira 프로젝트 전체 동기화 (스트리밍)
+ssearch source sync jira --project MYPROJ --all
+ssearch source sync jira --project MYPROJ --limit 100
+
 # Jira 이슈 (JQL 또는 이슈 키)
-ssearch source sync jira --query "project=MYPROJ" --limit 50
+ssearch source sync jira --query "status=Done" --limit 50
 ssearch source sync jira --query "PROJ-1234"
 
+# Confluence 스페이스 전체 동기화 (스트리밍)
+ssearch source sync confluence --project DOCS --all
+ssearch source sync confluence --project DOCS --limit 100
+
 # Confluence 페이지 (CQL 또는 페이지 ID/URL)
-ssearch source sync confluence --query "space=DOCS"
+ssearch source sync confluence --query "text~keyword" --limit 50
 
 # Figma 디자인 (URL)
 ssearch source sync figma --query "https://figma.com/design/xxx?node-id=123"

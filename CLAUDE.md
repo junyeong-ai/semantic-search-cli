@@ -71,10 +71,22 @@ pub async fn process_batch(
 ### External Source Sync
 
 **Pattern** (`sources/*.rs`):
-1. Check CLI availability (`which atlassian-cli`)
-2. Parse query (URL/ID/query string)
-3. Fetch via CLI subprocess
-4. Convert to `Document` with auto-tags
+```
+sync()
+├── --project → full project/space sync
+├── single ID → fetch_issue/fetch_page
+└── query → fetch_issues/fetch_pages
+    ├── limit → batch mode
+    └── no limit → streaming mode (--all --stream)
+```
+
+**CLI Options**:
+```bash
+ssearch source sync jira --project AKIT --all        # Full project (streaming)
+ssearch source sync jira --project AKIT --limit 100  # Batch mode
+ssearch source sync jira --query "AKIT-123"          # Single issue
+ssearch source sync confluence --project DOCS --all  # Full space (streaming)
+```
 
 **URL/ID Parsing**:
 ```rust
