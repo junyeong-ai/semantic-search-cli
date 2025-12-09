@@ -36,6 +36,7 @@ tarpaulin-report.html
 
 # Embedding server
 embedding-server.pid
+embedding-server.port
 embedding-server.log
 embedding-server/__pycache__/
 

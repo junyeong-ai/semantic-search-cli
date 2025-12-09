@@ -82,6 +82,7 @@ impl LocalSource {
             extension: path.extension().map(|e| e.to_string_lossy().to_string()),
             language: detect_language(path),
             title: None,
+            path: Some(path.to_string_lossy().to_string()),
             size_bytes: content.len() as u64,
         };
 

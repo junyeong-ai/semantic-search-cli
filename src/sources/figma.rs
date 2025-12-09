@@ -260,6 +260,7 @@ impl FigmaSource {
                     extension: Some("md".to_string()),
                     language: Some("markdown".to_string()),
                     title: Some(file_name.clone()),
+                    path: None,
                     size_bytes: content.len() as u64,
                 };
 
@@ -362,11 +363,13 @@ impl FigmaSource {
         let checksum = calculate_checksum(&content);
 
         let title = format!("{} - {}", page_name, node.name);
+        let node_path = format!("{} > {} > {}", file_name, page_name, node.name);
         let metadata = DocumentMetadata {
             filename: Some(format!("{}.md", sanitize_filename(&title))),
             extension: Some("md".to_string()),
             language: Some("markdown".to_string()),
             title: Some(title),
+            path: Some(node_path),
             size_bytes: content.len() as u64,
         };
 

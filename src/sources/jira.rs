@@ -209,6 +209,7 @@ impl JiraSource {
             extension: Some("md".to_string()),
             language: Some("markdown".to_string()),
             title: Some(summary.to_string()),
+            path: None,
             size_bytes: content.len() as u64,
         };
 

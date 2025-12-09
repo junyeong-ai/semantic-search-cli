@@ -21,6 +21,7 @@ pub struct DocumentMetadata {
     pub extension: Option<String>,
     pub language: Option<String>,
     pub title: Option<String>,
+    pub path: Option<String>,
     pub size_bytes: u64,
 }
 

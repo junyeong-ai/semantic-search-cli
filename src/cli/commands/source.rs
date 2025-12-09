@@ -26,13 +26,21 @@ pub enum SourceCommand {
         #[arg(long, short = 'q')]
         query: Option<String>,
 
+        /// Confluence space key (syncs all pages in space)
+        #[arg(long)]
+        space: Option<String>,
+
         /// Tags to apply to synced documents
         #[arg(long, short = 't')]
         tags: Option<String>,
 
-        /// Maximum items to sync
+        /// Maximum items to sync (ignored with --all)
         #[arg(long, default_value = "100")]
         limit: u32,
+
+        /// Fetch all items without limit
+        #[arg(long)]
+        all: bool,
 
         /// Exclude pages under these ancestor IDs (Confluence only, comma-separated)
         #[arg(long)]
@@ -63,8 +71,10 @@ pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bo
         SourceCommand::Sync {
             source,
             query,
+            space,
             tags,
             limit,
+            all,
             exclude_ancestor,
         } => {
             handle_sync(
@@ -72,8 +82,10 @@ pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bo
                 &config,
                 &source,
                 query,
+                space,
                 tags,
                 limit,
+                all,
                 exclude_ancestor,
                 verbose,
             )
@@ -149,8 +161,10 @@ async fn handle_sync(
     config: &Config,
     source: &str,
     query: Option<String>,
+    space: Option<String>,
     tags: Option<String>,
     limit: u32,
+    all: bool,
     exclude_ancestor: Option<String>,
     verbose: bool,
 ) -> Result<()> {
@@ -177,6 +191,10 @@ async fn handle_sync(
         );
     }
 
+    if space.is_some() && source_type != SourceType::Confluence {
+        anyhow::bail!("--space option is only available for Confluence source");
+    }
+
     let tags: Vec<Tag> = if let Some(ref tag_str) = tags {
         parse_tags(tag_str).context("failed to parse tags")?
     } else {
@@ -189,10 +207,15 @@ async fn handle_sync(
 
     println!("Syncing from {} source...", data_source.name());
     if verbose {
+        if let Some(ref s) = space {
+            println!("  Space: {}", s);
+        }
         if let Some(ref q) = query {
             println!("  Query: {}", q);
         }
-        println!("  Limit: {}", limit);
+        if !all {
+            println!("  Limit: {}", limit);
+        }
         if !exclude_ancestors.is_empty() {
             println!("  Excluding ancestors: {:?}", exclude_ancestors);
         }
@@ -200,8 +223,9 @@ async fn handle_sync(
 
     let sync_options = SyncOptions {
         query,
+        space,
         tags,
-        limit: Some(limit),
+        limit: if all { None } else { Some(limit) },
         exclude_ancestors,
     };
 

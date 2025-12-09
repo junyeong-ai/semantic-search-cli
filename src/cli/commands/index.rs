@@ -180,6 +180,7 @@ async fn handle_add(
                 .map(|e| e.to_string_lossy().to_string()),
             language: detect_language(file_path),
             title: None,
+            path: Some(file_path.to_string_lossy().to_string()),
             size_bytes: content.len() as u64,
         };
 

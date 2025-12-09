@@ -19,13 +19,16 @@ use crate::models::{Document, SourceType, Tag};
 /// Options for syncing data from a source.
 #[derive(Debug, Clone, Default)]
 pub struct SyncOptions {
-    /// Source-specific query (e.g., JQL for Jira)
+    /// Source-specific query (e.g., JQL for Jira, CQL for Confluence)
     pub query: Option<String>,
+
+    /// Confluence space key (syncs all pages in space)
+    pub space: Option<String>,
 
     /// Tags to apply to synced documents
     pub tags: Vec<Tag>,
 
-    /// Maximum items to sync
+    /// Maximum items to sync (None = unlimited)
     pub limit: Option<u32>,
 
     /// Ancestor IDs to exclude (for Confluence)

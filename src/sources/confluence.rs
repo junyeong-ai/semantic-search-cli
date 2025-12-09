@@ -1,4 +1,6 @@
-use std::process::Command;
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -11,27 +13,11 @@ use crate::utils::file::{calculate_checksum, sanitize_filename};
 use crate::utils::has_meaningful_content;
 
 #[derive(Debug, Deserialize)]
-struct SearchResultItem {
-    content: SearchContent,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchContent {
-    id: String,
-    #[serde(rename = "type")]
-    content_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchResults {
-    items: Vec<SearchResultItem>,
-}
-
-#[derive(Debug, Deserialize)]
 struct ConfluencePage {
     id: String,
     title: String,
     body: Option<Body>,
+    ancestors: Option<Vec<Ancestor>>,
     #[serde(rename = "_links")]
     links: Option<Links>,
 }
@@ -44,6 +30,11 @@ struct Body {
 #[derive(Debug, Deserialize)]
 struct StorageBody {
     value: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Ancestor {
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,12 +60,11 @@ impl ConfluenceSource {
     }
 
     pub fn check_available(&self) -> Result<bool, SourceError> {
-        let output = Command::new("which")
+        Command::new("which")
             .arg("atlassian-cli")
             .output()
-            .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
-
-        Ok(output.status.success())
+            .map(|o| o.status.success())
+            .map_err(|e| SourceError::ExecutionError(e.to_string()))
     }
 
     pub fn install_instructions(&self) -> &str {
@@ -88,62 +78,189 @@ impl ConfluenceSource {
             ));
         }
 
+        if let Some(ref space) = options.space {
+            return self.sync_space(space, &options);
+        }
+
         let query = options.query.as_deref().unwrap_or("type=page");
 
         if let Some(page_id) = extract_page_id(query) {
-            return match self.fetch_page(&page_id, &options.tags) {
-                Ok(doc) => Ok(vec![doc]),
-                Err(e) => Err(e),
-            };
+            return self
+                .fetch_page(&page_id, &options.tags)
+                .map(|doc| vec![doc]);
         }
 
-        let limit = options.limit.unwrap_or(10);
+        self.sync_by_query(query, &options)
+    }
 
-        let search_output = Command::new("atlassian-cli")
-            .args(["confluence", "search", query, "--limit", &limit.to_string()])
+    fn sync_space(
+        &self,
+        space: &str,
+        options: &SyncOptions,
+    ) -> Result<Vec<Document>, SourceError> {
+        let cql = format!("space=\"{}\" AND type=page", space);
+        self.fetch_pages_streaming(&cql, options)
+    }
+
+    fn sync_by_query(
+        &self,
+        query: &str,
+        options: &SyncOptions,
+    ) -> Result<Vec<Document>, SourceError> {
+        self.fetch_pages_streaming(query, options)
+    }
+
+    fn fetch_pages_streaming(
+        &self,
+        cql: &str,
+        options: &SyncOptions,
+    ) -> Result<Vec<Document>, SourceError> {
+        let excluded_ids = self.get_excluded_ids(&options.exclude_ancestors)?;
+
+        if options.limit.is_some() {
+            return self.fetch_pages_batch(cql, options, &excluded_ids);
+        }
+
+        let args = [
+            "confluence",
+            "search",
+            cql,
+            "--format",
+            "markdown",
+            "--expand",
+            "body.storage,ancestors",
+            "--all",
+            "--stream",
+        ];
+
+        eprintln!("Running: atlassian-cli {}", args.join(" "));
+
+        let mut child = Command::new("atlassian-cli")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SourceError::ExecutionError("failed to capture stdout".to_string()))?;
+
+        let reader = BufReader::new(stdout);
+        let mut documents = Vec::new();
+        let mut skipped = 0;
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) if !l.trim().is_empty() => l,
+                _ => continue,
+            };
+
+            let page: ConfluencePage = match serde_json::from_str(&line) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            if excluded_ids.contains(&page.id) {
+                skipped += 1;
+                continue;
+            }
+
+            match self.page_to_document(page, &options.tags) {
+                Ok(doc) => {
+                    documents.push(doc);
+                    if documents.len() % 50 == 0 {
+                        eprintln!("  Processed {} pages...", documents.len());
+                    }
+                }
+                Err(_) => skipped += 1,
+            }
+        }
+
+        let status = child.wait().map_err(|e| SourceError::ExecutionError(e.to_string()))?;
+        if !status.success() {
+            let stderr = child
+                .stderr
+                .map(|mut s| {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                    buf
+                })
+                .unwrap_or_default();
+            if !stderr.is_empty() {
+                eprintln!("Warning: {}", stderr.trim());
+            }
+        }
+
+        if skipped > 0 {
+            eprintln!("  Skipped {} pages (excluded or empty)", skipped);
+        }
+
+        Ok(documents)
+    }
+
+    fn fetch_pages_batch(
+        &self,
+        cql: &str,
+        options: &SyncOptions,
+        excluded_ids: &HashSet<String>,
+    ) -> Result<Vec<Document>, SourceError> {
+        let limit = options.limit.unwrap_or(100);
+        let limit_str = limit.to_string();
+
+        let args = [
+            "confluence",
+            "search",
+            cql,
+            "--format",
+            "markdown",
+            "--expand",
+            "body.storage,ancestors",
+            "--limit",
+            &limit_str,
+        ];
+
+        eprintln!("Running: atlassian-cli {}", args.join(" "));
+
+        let output = Command::new("atlassian-cli")
+            .args(&args)
             .output()
             .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
 
-        if !search_output.status.success() {
-            let stderr = String::from_utf8_lossy(&search_output.stderr);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(SourceError::ExecutionError(format!(
                 "confluence search failed: {}",
                 stderr
             )));
         }
 
-        let search_json = String::from_utf8_lossy(&search_output.stdout);
-        let search_results: SearchResults = serde_json::from_str(&search_json).map_err(|e| {
-            SourceError::ParseError(format!("failed to parse search results: {}", e))
-        })?;
-
-        let excluded_ids = self.get_excluded_page_ids(&options.exclude_ancestors)?;
-
-        let page_ids: Vec<_> = search_results
-            .items
-            .iter()
-            .filter(|item| {
-                item.content
-                    .content_type
-                    .as_deref()
-                    .is_none_or(|t| t == "page")
-            })
-            .map(|item| item.content.id.clone())
-            .filter(|id| !excluded_ids.contains(id))
-            .collect();
-
-        if page_ids.is_empty() {
-            return Ok(Vec::new());
+        #[derive(Deserialize)]
+        struct SearchResponse {
+            items: Vec<ConfluencePage>,
         }
 
+        let response: SearchResponse = serde_json::from_slice(&output.stdout)
+            .map_err(|e| SourceError::ParseError(format!("failed to parse response: {}", e)))?;
+
         let mut documents = Vec::new();
-        for page_id in page_ids {
-            match self.fetch_page(&page_id, &options.tags) {
-                Ok(doc) => documents.push(doc),
-                Err(e) => {
-                    eprintln!("Warning: failed to fetch page {}: {}", page_id, e);
-                }
+        let mut skipped = 0;
+
+        for page in response.items {
+            if excluded_ids.contains(&page.id) {
+                skipped += 1;
+                continue;
             }
+
+            match self.page_to_document(page, &options.tags) {
+                Ok(doc) => documents.push(doc),
+                Err(_) => skipped += 1,
+            }
+        }
+
+        if skipped > 0 {
+            eprintln!("  Skipped {} pages (excluded or empty)", skipped);
         }
 
         Ok(documents)
@@ -163,31 +280,43 @@ impl ConfluenceSource {
             )));
         }
 
-        let json = String::from_utf8_lossy(&output.stdout);
-        let page: ConfluencePage = serde_json::from_str(&json)
+        let page: ConfluencePage = serde_json::from_slice(&output.stdout)
             .map_err(|e| SourceError::ParseError(format!("failed to parse page: {}", e)))?;
 
         self.page_to_document(page, tags)
     }
 
-    fn get_excluded_page_ids(
-        &self,
-        exclude_ancestors: &[String],
-    ) -> Result<std::collections::HashSet<String>, SourceError> {
-        let mut excluded = std::collections::HashSet::new();
+    fn get_excluded_ids(&self, exclude_ancestors: &[String]) -> Result<HashSet<String>, SourceError> {
+        let mut excluded = HashSet::new();
 
         for ancestor_id in exclude_ancestors {
             excluded.insert(ancestor_id.clone());
 
-            let query = format!("ancestor={}", ancestor_id);
             let output = Command::new("atlassian-cli")
-                .args(["confluence", "search", &query, "--limit", "1000"])
+                .args([
+                    "confluence",
+                    "search",
+                    &format!("ancestor={}", ancestor_id),
+                    "--all",
+                ])
                 .output()
                 .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
 
             if output.status.success() {
-                let json = String::from_utf8_lossy(&output.stdout);
-                if let Ok(results) = serde_json::from_str::<SearchResults>(&json) {
+                #[derive(Deserialize)]
+                struct SearchItem {
+                    content: ContentRef,
+                }
+                #[derive(Deserialize)]
+                struct ContentRef {
+                    id: String,
+                }
+                #[derive(Deserialize)]
+                struct SearchResults {
+                    items: Vec<SearchItem>,
+                }
+
+                if let Ok(results) = serde_json::from_slice::<SearchResults>(&output.stdout) {
                     for item in results.items {
                         excluded.insert(item.content.id);
                     }
@@ -195,14 +324,14 @@ impl ConfluenceSource {
             }
         }
 
+        if !excluded.is_empty() {
+            eprintln!("  Excluding {} pages (ancestor filter)", excluded.len());
+        }
+
         Ok(excluded)
     }
 
-    fn page_to_document(
-        &self,
-        page: ConfluencePage,
-        tags: &[Tag],
-    ) -> Result<Document, SourceError> {
+    fn page_to_document(&self, page: ConfluencePage, tags: &[Tag]) -> Result<Document, SourceError> {
         let raw_content = page
             .body
             .as_ref()
@@ -218,6 +347,7 @@ impl ConfluenceSource {
             )));
         }
 
+        let path = build_page_path(&page);
         let full_content = format!("# {}\n\n{}", page.title, cleaned_content);
 
         let url = page.links.as_ref().map_or_else(
@@ -225,7 +355,7 @@ impl ConfluenceSource {
             |l| {
                 let base = l.base.as_deref().unwrap_or("");
                 let webui = l.webui.as_deref().unwrap_or("");
-                format!("{base}{webui}")
+                format!("{}{}", base, webui)
             },
         );
 
@@ -237,6 +367,7 @@ impl ConfluenceSource {
             extension: Some("md".to_string()),
             language: Some("markdown".to_string()),
             title: Some(page.title.clone()),
+            path: Some(path),
             size_bytes: full_content.len() as u64,
         };
 
@@ -269,19 +400,35 @@ fn extract_page_id(query: &str) -> Option<String> {
             .split("/pages/")
             .nth(1)
             .and_then(|rest| rest.split('/').next())
-            .filter(|id| is_valid_page_id(id))
+            .filter(|id| is_numeric_id(id))
             .map(String::from);
     }
 
-    if is_valid_page_id(query) {
+    if is_numeric_id(query) {
         return Some(query.to_string());
     }
 
     None
 }
 
-fn is_valid_page_id(id: &str) -> bool {
+fn is_numeric_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())
+}
+
+fn build_page_path(page: &ConfluencePage) -> String {
+    let ancestors: Vec<&str> = page
+        .ancestors
+        .as_ref()
+        .map(|a| {
+            a.iter()
+                .filter_map(|anc| anc.title.as_deref())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut parts = ancestors;
+    parts.push(&page.title);
+    parts.join(" > ")
 }
 
 static RE_MACRO_METADATA: LazyLock<Regex> =
@@ -334,5 +481,24 @@ mod tests {
         assert_eq!(extract_page_id("space=COMMON"), None);
         assert_eq!(extract_page_id("type=page"), None);
         assert_eq!(extract_page_id("text~hello"), None);
+    }
+
+    #[test]
+    fn test_build_page_path() {
+        let page = ConfluencePage {
+            id: "123".to_string(),
+            title: "My Page".to_string(),
+            body: None,
+            ancestors: Some(vec![
+                Ancestor {
+                    title: Some("Root".to_string()),
+                },
+                Ancestor {
+                    title: Some("Parent".to_string()),
+                },
+            ]),
+            links: None,
+        };
+        assert_eq!(build_page_path(&page), "Root > Parent > My Page");
     }
 }

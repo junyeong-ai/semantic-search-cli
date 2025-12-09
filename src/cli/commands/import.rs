@@ -36,20 +36,12 @@ pub struct ImportArgs {
 /// JSON import document format.
 #[derive(Debug, Deserialize)]
 pub struct ImportDocument {
-    /// Document content (required)
     pub content: String,
-
-    /// Source URL (required)
     pub url: String,
-
-    /// Document title (optional)
     pub title: Option<String>,
-
-    /// Tags from JSON file (optional, format: ["key:value", ...])
+    pub path: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
-
-    /// Source type (optional, e.g., "confluence", "jira")
     pub source_type: Option<String>,
 }
 
@@ -141,6 +133,7 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
             extension: None,
             language: None,
             title: import_doc.title.clone(),
+            path: import_doc.path.clone(),
             size_bytes: import_doc.content.len() as u64,
         };
 
