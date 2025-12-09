@@ -1,43 +1,28 @@
-//! Jira data source via atlassian-cli integration.
-
-use std::process::Command;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::error::SourceError;
 use crate::models::{Document, DocumentMetadata, Source, SourceType, Tag};
 use crate::sources::SyncOptions;
 use crate::utils::file::calculate_checksum;
+use crate::utils::has_meaningful_content;
 
-/// Search result item.
-#[derive(Debug, Deserialize)]
-struct SearchResultItem {
-    key: String,
-}
-
-/// Search results wrapper.
-#[derive(Debug, Deserialize)]
-struct SearchResults {
-    items: Vec<SearchResultItem>,
-}
-
-/// Full issue from jira get command.
 #[derive(Debug, Deserialize)]
 struct JiraIssue {
     key: String,
     fields: JiraFields,
-    #[serde(rename = "self")]
-    self_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct JiraFields {
     summary: Option<String>,
-    description: Option<Value>,
+    description: Option<String>,
     issuetype: Option<IssueType>,
     status: Option<Status>,
     project: Option<Project>,
+    parent: Option<Parent>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,9 +38,20 @@ struct Status {
 #[derive(Debug, Deserialize)]
 struct Project {
     key: Option<String>,
+    name: Option<String>,
 }
 
-/// Jira data source implementation.
+#[derive(Debug, Deserialize)]
+struct Parent {
+    key: Option<String>,
+    fields: Option<ParentFields>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ParentFields {
+    summary: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct JiraSource;
 
@@ -73,12 +69,11 @@ impl JiraSource {
     }
 
     pub fn check_available(&self) -> Result<bool, SourceError> {
-        let output = Command::new("which")
+        Command::new("which")
             .arg("atlassian-cli")
             .output()
-            .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
-
-        Ok(output.status.success())
+            .map(|o| o.status.success())
+            .map_err(|e| SourceError::ExecutionError(e.to_string()))
     }
 
     pub fn install_instructions(&self) -> &str {
@@ -92,50 +87,146 @@ impl JiraSource {
             ));
         }
 
-        let query = options.query.as_deref().unwrap_or("ORDER BY updated DESC");
-
-        // Check if query is a Jira URL or direct issue key → fetch directly
-        if let Some(issue_key) = extract_issue_key(query) {
-            return match self.fetch_issue(&issue_key, &options.tags) {
-                Ok(doc) => Ok(vec![doc]),
-                Err(e) => Err(e),
-            };
+        // --project → sync entire project
+        if let Some(ref project) = options.project {
+            let jql = format!("project={}", project);
+            return self.fetch_issues(&jql, &options);
         }
 
-        // JQL query → search then fetch each issue
-        let limit = options.limit.unwrap_or(10);
+        let query = options.query.as_deref().unwrap_or("ORDER BY updated DESC");
 
-        let search_output = Command::new("atlassian-cli")
-            .args(["jira", "search", query, "--limit", &limit.to_string()])
+        // Direct issue key → fetch single issue
+        if let Some(issue_key) = extract_issue_key(query) {
+            return self
+                .fetch_issue(&issue_key, &options.tags)
+                .map(|doc| vec![doc]);
+        }
+
+        // JQL query
+        self.fetch_issues(query, &options)
+    }
+
+    fn fetch_issues(&self, jql: &str, options: &SyncOptions) -> Result<Vec<Document>, SourceError> {
+        if options.limit.is_some() {
+            return self.fetch_issues_batch(jql, options);
+        }
+
+        // Streaming mode (--all --stream)
+        let args = [
+            "jira", "search", jql, "--format", "markdown", "--all", "--stream",
+        ];
+
+        eprintln!("Running: atlassian-cli {}", args.join(" "));
+
+        let mut child = Command::new("atlassian-cli")
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SourceError::ExecutionError("failed to capture stdout".to_string()))?;
+
+        let reader = BufReader::new(stdout);
+        let mut documents = Vec::new();
+        let mut skipped = 0;
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) if !l.trim().is_empty() => l,
+                _ => continue,
+            };
+
+            let issue: JiraIssue = match serde_json::from_str(&line) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+
+            match self.issue_to_document(issue, &options.tags) {
+                Ok(doc) => {
+                    documents.push(doc);
+                    if documents.len() % 50 == 0 {
+                        eprintln!("  Processed {} issues...", documents.len());
+                    }
+                }
+                Err(_) => skipped += 1,
+            }
+        }
+
+        let status = child
+            .wait()
+            .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
+        if !status.success() {
+            let stderr = child
+                .stderr
+                .map(|mut s| {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                    buf
+                })
+                .unwrap_or_default();
+            if !stderr.is_empty() {
+                eprintln!("Warning: {}", stderr.trim());
+            }
+        }
+
+        if skipped > 0 {
+            eprintln!("  Skipped {} issues (empty content)", skipped);
+        }
+
+        Ok(documents)
+    }
+
+    fn fetch_issues_batch(
+        &self,
+        jql: &str,
+        options: &SyncOptions,
+    ) -> Result<Vec<Document>, SourceError> {
+        let limit = options.limit.unwrap_or(100);
+        let limit_str = limit.to_string();
+
+        let args = [
+            "jira", "search", jql, "--format", "markdown", "--limit", &limit_str,
+        ];
+
+        eprintln!("Running: atlassian-cli {}", args.join(" "));
+
+        let output = Command::new("atlassian-cli")
+            .args(args)
             .output()
             .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
 
-        if !search_output.status.success() {
-            let stderr = String::from_utf8_lossy(&search_output.stderr);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(SourceError::ExecutionError(format!(
                 "jira search failed: {}",
                 stderr
             )));
         }
 
-        let search_json = String::from_utf8_lossy(&search_output.stdout);
-        let search_results: SearchResults = serde_json::from_str(&search_json).map_err(|e| {
-            SourceError::ParseError(format!("failed to parse search results: {}", e))
-        })?;
-
-        let issue_keys: Vec<_> = search_results.items.iter().map(|i| i.key.clone()).collect();
-
-        if issue_keys.is_empty() {
-            return Ok(Vec::new());
+        #[derive(Deserialize)]
+        struct SearchResponse {
+            items: Vec<JiraIssue>,
         }
 
-        // Step 2: Fetch each issue's full content
+        let response: SearchResponse = serde_json::from_slice(&output.stdout)
+            .map_err(|e| SourceError::ParseError(format!("failed to parse response: {}", e)))?;
+
         let mut documents = Vec::new();
-        for key in issue_keys {
-            match self.fetch_issue(&key, &options.tags) {
+        let mut skipped = 0;
+
+        for issue in response.items {
+            match self.issue_to_document(issue, &options.tags) {
                 Ok(doc) => documents.push(doc),
-                Err(e) => eprintln!("Warning: failed to fetch issue {}: {}", key, e),
+                Err(_) => skipped += 1,
             }
+        }
+
+        if skipped > 0 {
+            eprintln!("  Skipped {} issues (empty content)", skipped);
         }
 
         Ok(documents)
@@ -143,7 +234,7 @@ impl JiraSource {
 
     fn fetch_issue(&self, key: &str, tags: &[Tag]) -> Result<Document, SourceError> {
         let output = Command::new("atlassian-cli")
-            .args(["jira", "get", key])
+            .args(["jira", "get", key, "--format", "markdown"])
             .output()
             .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
 
@@ -155,8 +246,7 @@ impl JiraSource {
             )));
         }
 
-        let json = String::from_utf8_lossy(&output.stdout);
-        let issue: JiraIssue = serde_json::from_str(&json)
+        let issue: JiraIssue = serde_json::from_slice(&output.stdout)
             .map_err(|e| SourceError::ParseError(format!("failed to parse issue: {}", e)))?;
 
         self.issue_to_document(issue, tags)
@@ -165,41 +255,27 @@ impl JiraSource {
     fn issue_to_document(&self, issue: JiraIssue, tags: &[Tag]) -> Result<Document, SourceError> {
         let key = &issue.key;
         let summary = issue.fields.summary.as_deref().unwrap_or("");
-
-        // Extract text from ADF description
-        let description = issue
-            .fields
-            .description
-            .as_ref()
-            .map(extract_text_from_adf)
-            .unwrap_or_default();
+        let description = issue.fields.description.as_deref().unwrap_or("");
 
         // Build content
-        let mut content_parts = Vec::new();
-        if !summary.is_empty() {
-            content_parts.push(format!("# {}\n", summary));
-        }
-        if !description.is_empty() {
-            content_parts.push(format!("\n{}\n", description));
-        }
+        let content = if description.is_empty() {
+            format!("# {}\n\n{}", key, summary)
+        } else {
+            format!("# {}\n\n{}\n\n{}", key, summary, description)
+        };
 
-        let content = content_parts.join("");
-        if content.trim().is_empty() {
+        if !has_meaningful_content(&content) {
             return Err(SourceError::ParseError(format!(
-                "issue {} has no content",
+                "issue {} has no meaningful content",
                 key
             )));
         }
 
+        // Build path: Project > Parent (if exists) > Issue
+        let path = build_issue_path(&issue);
+
         // Build URL
-        let url = issue.self_url.as_ref().map_or_else(
-            || key.clone(),
-            |u| {
-                u.split("/rest/api/")
-                    .next()
-                    .map_or_else(|| key.clone(), |base| format!("{base}/browse/{key}"))
-            },
-        );
+        let url = format!("https://42dot.atlassian.net/browse/{}", key);
 
         let source = Source::external(SourceType::Jira, key.clone(), url);
         let checksum = calculate_checksum(&content);
@@ -209,7 +285,7 @@ impl JiraSource {
             extension: Some("md".to_string()),
             language: Some("markdown".to_string()),
             title: Some(summary.to_string()),
-            path: None,
+            path: Some(path),
             size_bytes: content.len() as u64,
         };
 
@@ -248,14 +324,10 @@ impl Default for JiraSource {
     }
 }
 
-/// Extract issue key from Jira URL or direct key.
-/// Supports:
-///   - Direct key: PROJECT-123, PROJ-1234
-///   - URL: https://domain.atlassian.net/browse/PROJECT-123
 fn extract_issue_key(query: &str) -> Option<String> {
     let query = query.trim();
 
-    // Check if it's a URL
+    // URL: https://domain.atlassian.net/browse/PROJECT-123
     if query.contains("atlassian.net/browse/") {
         return query
             .split("/browse/")
@@ -265,7 +337,7 @@ fn extract_issue_key(query: &str) -> Option<String> {
             .map(String::from);
     }
 
-    // Check if it's a direct issue key (e.g., PROJ-1234)
+    // Direct issue key: PROJ-1234
     if is_valid_issue_key(query) {
         return Some(query.to_string());
     }
@@ -283,36 +355,34 @@ fn is_valid_issue_key(key: &str) -> bool {
             .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// Extract plain text from Atlassian Document Format (ADF).
-fn extract_text_from_adf(value: &Value) -> String {
-    let mut result = String::new();
-    extract_text_recursive(value, &mut result);
-    result.trim().to_string()
-}
+fn build_issue_path(issue: &JiraIssue) -> String {
+    let mut parts = Vec::new();
 
-fn extract_text_recursive(value: &Value, result: &mut String) {
-    match value {
-        Value::Object(obj) => {
-            if let Some(Value::String(text)) = obj.get("text") {
-                result.push_str(text);
-            }
-            if let Some(content) = obj.get("content") {
-                extract_text_recursive(content, result);
-            }
-            // Handle paragraph/listItem boundaries
-            if let Some(Value::String(node_type)) = obj.get("type")
-                && matches!(node_type.as_str(), "paragraph" | "listItem" | "heading")
-            {
-                result.push('\n');
-            }
+    // Project name
+    if let Some(ref project) = issue.fields.project {
+        if let Some(ref name) = project.name {
+            parts.push(name.as_str());
+        } else if let Some(ref key) = project.key {
+            parts.push(key.as_str());
         }
-        Value::Array(arr) => {
-            for item in arr {
-                extract_text_recursive(item, result);
-            }
-        }
-        _ => {}
     }
+
+    // Parent issue (Epic, etc.)
+    if let Some(ref parent) = issue.fields.parent {
+        if let Some(ref fields) = parent.fields {
+            if let Some(ref summary) = fields.summary {
+                parts.push(summary.as_str());
+            }
+        } else if let Some(ref key) = parent.key {
+            parts.push(key.as_str());
+        }
+    }
+
+    // Current issue
+    let summary = issue.fields.summary.as_deref().unwrap_or(&issue.key);
+    parts.push(summary);
+
+    parts.join(" > ")
 }
 
 #[cfg(test)]
@@ -324,25 +394,6 @@ mod tests {
         let source = JiraSource::new();
         assert_eq!(source.source_type(), SourceType::Jira);
         assert_eq!(source.name(), "Jira");
-    }
-
-    #[test]
-    fn test_extract_text_from_adf() {
-        let adf = serde_json::json!({
-            "type": "doc",
-            "content": [
-                {
-                    "type": "paragraph",
-                    "content": [
-                        {"type": "text", "text": "Hello "},
-                        {"type": "text", "text": "World"}
-                    ]
-                }
-            ]
-        });
-        let text = extract_text_from_adf(&adf);
-        assert!(text.contains("Hello"));
-        assert!(text.contains("World"));
     }
 
     #[test]
@@ -365,5 +416,30 @@ mod tests {
         assert_eq!(extract_issue_key("key=PROJ-123"), None);
         assert_eq!(extract_issue_key("ORDER BY updated"), None);
         assert_eq!(extract_issue_key("project=PROJ"), None);
+    }
+
+    #[test]
+    fn test_build_issue_path() {
+        let issue = JiraIssue {
+            key: "AKIT-123".to_string(),
+            fields: JiraFields {
+                summary: Some("Test Issue".to_string()),
+                description: None,
+                issuetype: None,
+                status: None,
+                project: Some(Project {
+                    key: Some("AKIT".to_string()),
+                    name: Some("AKit".to_string()),
+                }),
+                parent: Some(Parent {
+                    key: Some("AKIT-100".to_string()),
+                    fields: Some(ParentFields {
+                        summary: Some("Parent Epic".to_string()),
+                    }),
+                }),
+            },
+        };
+
+        assert_eq!(build_issue_path(&issue), "AKit > Parent Epic > Test Issue");
     }
 }

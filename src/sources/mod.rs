@@ -22,13 +22,13 @@ pub struct SyncOptions {
     /// Source-specific query (e.g., JQL for Jira, CQL for Confluence)
     pub query: Option<String>,
 
-    /// Confluence space key (syncs all pages in space)
-    pub space: Option<String>,
+    /// Project key (for Jira) or space key (for Confluence)
+    pub project: Option<String>,
 
     /// Tags to apply to synced documents
     pub tags: Vec<Tag>,
 
-    /// Maximum items to sync (None = unlimited)
+    /// Maximum items to sync (None = unlimited with --all)
     pub limit: Option<u32>,
 
     /// Ancestor IDs to exclude (for Confluence)

@@ -78,43 +78,26 @@ impl ConfluenceSource {
             ));
         }
 
-        if let Some(ref space) = options.space {
-            return self.sync_space(space, &options);
+        // --project (space key) → sync entire space
+        if let Some(ref space) = options.project {
+            let cql = format!("space=\"{}\" AND type=page", space);
+            return self.fetch_pages(&cql, &options);
         }
 
         let query = options.query.as_deref().unwrap_or("type=page");
 
+        // Direct page ID → fetch single page
         if let Some(page_id) = extract_page_id(query) {
             return self
                 .fetch_page(&page_id, &options.tags)
                 .map(|doc| vec![doc]);
         }
 
-        self.sync_by_query(query, &options)
+        // CQL query
+        self.fetch_pages(query, &options)
     }
 
-    fn sync_space(
-        &self,
-        space: &str,
-        options: &SyncOptions,
-    ) -> Result<Vec<Document>, SourceError> {
-        let cql = format!("space=\"{}\" AND type=page", space);
-        self.fetch_pages_streaming(&cql, options)
-    }
-
-    fn sync_by_query(
-        &self,
-        query: &str,
-        options: &SyncOptions,
-    ) -> Result<Vec<Document>, SourceError> {
-        self.fetch_pages_streaming(query, options)
-    }
-
-    fn fetch_pages_streaming(
-        &self,
-        cql: &str,
-        options: &SyncOptions,
-    ) -> Result<Vec<Document>, SourceError> {
+    fn fetch_pages(&self, cql: &str, options: &SyncOptions) -> Result<Vec<Document>, SourceError> {
         let excluded_ids = self.get_excluded_ids(&options.exclude_ancestors)?;
 
         if options.limit.is_some() {
@@ -136,7 +119,7 @@ impl ConfluenceSource {
         eprintln!("Running: atlassian-cli {}", args.join(" "));
 
         let mut child = Command::new("atlassian-cli")
-            .args(&args)
+            .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -178,7 +161,9 @@ impl ConfluenceSource {
             }
         }
 
-        let status = child.wait().map_err(|e| SourceError::ExecutionError(e.to_string()))?;
+        let status = child
+            .wait()
+            .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
         if !status.success() {
             let stderr = child
                 .stderr
@@ -224,7 +209,7 @@ impl ConfluenceSource {
         eprintln!("Running: atlassian-cli {}", args.join(" "));
 
         let output = Command::new("atlassian-cli")
-            .args(&args)
+            .args(args)
             .output()
             .map_err(|e| SourceError::ExecutionError(e.to_string()))?;
 
@@ -286,7 +271,10 @@ impl ConfluenceSource {
         self.page_to_document(page, tags)
     }
 
-    fn get_excluded_ids(&self, exclude_ancestors: &[String]) -> Result<HashSet<String>, SourceError> {
+    fn get_excluded_ids(
+        &self,
+        exclude_ancestors: &[String],
+    ) -> Result<HashSet<String>, SourceError> {
         let mut excluded = HashSet::new();
 
         for ancestor_id in exclude_ancestors {
@@ -331,7 +319,11 @@ impl ConfluenceSource {
         Ok(excluded)
     }
 
-    fn page_to_document(&self, page: ConfluencePage, tags: &[Tag]) -> Result<Document, SourceError> {
+    fn page_to_document(
+        &self,
+        page: ConfluencePage,
+        tags: &[Tag],
+    ) -> Result<Document, SourceError> {
         let raw_content = page
             .body
             .as_ref()
@@ -419,11 +411,7 @@ fn build_page_path(page: &ConfluencePage) -> String {
     let ancestors: Vec<&str> = page
         .ancestors
         .as_ref()
-        .map(|a| {
-            a.iter()
-                .filter_map(|anc| anc.title.as_deref())
-                .collect()
-        })
+        .map(|a| a.iter().filter_map(|anc| anc.title.as_deref()).collect())
         .unwrap_or_default();
 
     let mut parts = ancestors;

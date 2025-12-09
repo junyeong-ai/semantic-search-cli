@@ -26,9 +26,9 @@ pub enum SourceCommand {
         #[arg(long, short = 'q')]
         query: Option<String>,
 
-        /// Confluence space key (syncs all pages in space)
-        #[arg(long)]
-        space: Option<String>,
+        /// Project key (Jira) or space key (Confluence) - syncs all items
+        #[arg(long, short = 'p')]
+        project: Option<String>,
 
         /// Tags to apply to synced documents
         #[arg(long, short = 't')]
@@ -38,7 +38,7 @@ pub enum SourceCommand {
         #[arg(long, default_value = "100")]
         limit: u32,
 
-        /// Fetch all items without limit
+        /// Fetch all items without limit (streaming mode)
         #[arg(long)]
         all: bool,
 
@@ -71,7 +71,7 @@ pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bo
         SourceCommand::Sync {
             source,
             query,
-            space,
+            project,
             tags,
             limit,
             all,
@@ -82,7 +82,7 @@ pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bo
                 &config,
                 &source,
                 query,
-                space,
+                project,
                 tags,
                 limit,
                 all,
@@ -161,7 +161,7 @@ async fn handle_sync(
     config: &Config,
     source: &str,
     query: Option<String>,
-    space: Option<String>,
+    project: Option<String>,
     tags: Option<String>,
     limit: u32,
     all: bool,
@@ -191,8 +191,8 @@ async fn handle_sync(
         );
     }
 
-    if space.is_some() && source_type != SourceType::Confluence {
-        anyhow::bail!("--space option is only available for Confluence source");
+    if project.is_some() && !matches!(source_type, SourceType::Jira | SourceType::Confluence) {
+        anyhow::bail!("--project option is only available for Jira and Confluence sources");
     }
 
     let tags: Vec<Tag> = if let Some(ref tag_str) = tags {
@@ -207,8 +207,8 @@ async fn handle_sync(
 
     println!("Syncing from {} source...", data_source.name());
     if verbose {
-        if let Some(ref s) = space {
-            println!("  Space: {}", s);
+        if let Some(ref p) = project {
+            println!("  Project: {}", p);
         }
         if let Some(ref q) = query {
             println!("  Query: {}", q);
@@ -223,7 +223,7 @@ async fn handle_sync(
 
     let sync_options = SyncOptions {
         query,
-        space,
+        project,
         tags,
         limit: if all { None } else { Some(limit) },
         exclude_ancestors,
