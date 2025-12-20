@@ -11,7 +11,7 @@ use crate::cli::output::{IndexStats, get_formatter};
 use crate::models::{
     Config, Document, DocumentMetadata, OutputFormat, Source, SourceType, Tag, parse_tags,
 };
-use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
+use crate::services::{EmbeddingClient, TextChunker, create_backend, process_batch};
 use crate::utils::file::{calculate_checksum, is_text_file, read_file_content};
 
 #[derive(Debug, Subcommand)]
@@ -120,9 +120,9 @@ async fn handle_add(
         return Ok(());
     }
 
-    let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
-    vector_client.create_collection().await?;
+    let embedding_client = EmbeddingClient::new(&config);
+    let vector_store = create_backend(&config.vector_store).await?;
+    vector_store.create_collection().await?;
 
     let chunker = TextChunker::new(&config.indexing);
 
@@ -197,7 +197,7 @@ async fn handle_add(
         if pending_texts.len() >= batch_size {
             process_batch(
                 &embedding_client,
-                &vector_client,
+                vector_store.as_ref(),
                 &mut pending_chunks,
                 &mut pending_texts,
             )
@@ -208,7 +208,7 @@ async fn handle_add(
     if !pending_texts.is_empty() {
         process_batch(
             &embedding_client,
-            &vector_client,
+            vector_store.as_ref(),
             &mut pending_chunks,
             &mut pending_texts,
         )
@@ -263,7 +263,7 @@ async fn handle_delete(
         }
     }
 
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
+    let vector_store = create_backend(&config.vector_store).await?;
 
     let files = if path.is_file() {
         vec![path.clone()]
@@ -288,7 +288,7 @@ async fn handle_delete(
         })
         .collect();
 
-    vector_client.delete_by_document_ids(&document_ids).await?;
+    vector_store.delete_by_document_ids(&document_ids).await?;
 
     println!(
         "{}",
@@ -316,8 +316,8 @@ async fn handle_clear(force: bool, format: OutputFormat, verbose: bool) -> Resul
         }
     }
 
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
-    vector_client.clear_collection().await?;
+    let vector_store = create_backend(&config.vector_store).await?;
+    vector_store.clear_collection().await?;
 
     println!(
         "{}",

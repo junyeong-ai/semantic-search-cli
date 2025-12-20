@@ -1,10 +1,8 @@
-//! Output formatters for different output formats.
-
 use std::fmt::Write as FmtWrite;
 
 use crate::models::{OutputFormat, SearchResults};
+use crate::services::MetricsSummary;
 
-/// Trait for formatting output.
 pub trait Formatter {
     fn format_search_results(&self, results: &SearchResults) -> String;
     fn format_status(&self, status: &StatusInfo) -> String;
@@ -16,19 +14,19 @@ pub trait Formatter {
     fn format_error(&self, error: &str) -> String;
 }
 
-/// Infrastructure status information.
 #[derive(Debug, Clone)]
 pub struct StatusInfo {
-    pub embedding_url: String,
-    pub embedding_connected: bool,
+    pub daemon_running: bool,
+    pub daemon_idle_secs: Option<u64>,
     pub embedding_model: Option<String>,
-    pub qdrant_url: String,
-    pub qdrant_connected: bool,
-    pub qdrant_points: u64,
+    pub vector_store_driver: String,
+    pub vector_store_url: String,
+    pub vector_store_connected: bool,
+    pub vector_store_points: u64,
     pub collection: String,
+    pub metrics: Option<MetricsSummary>,
 }
 
-/// Indexing statistics.
 #[derive(Debug, Clone, Default)]
 pub struct IndexStats {
     pub files_scanned: u64,
@@ -38,7 +36,6 @@ pub struct IndexStats {
     pub duration_ms: u64,
 }
 
-/// Data source information.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
     pub name: String,
@@ -46,7 +43,6 @@ pub struct SourceInfo {
     pub available: bool,
 }
 
-/// CLI tool status information.
 #[derive(Debug, Clone)]
 pub struct CliInfo {
     pub name: String,
@@ -55,7 +51,6 @@ pub struct CliInfo {
     pub version: Option<String>,
 }
 
-/// Text formatter for human-readable output.
 pub struct TextFormatter;
 
 impl Formatter for TextFormatter {
@@ -82,7 +77,6 @@ impl Formatter for TextFormatter {
             }
             writeln!(output, "   ---").unwrap();
 
-            // Show content preview (first 200 chars, UTF-8 safe)
             let preview: String = result.content.chars().take(200).collect();
             let preview = if result.content.chars().count() > 200 {
                 format!("{}...", preview)
@@ -100,42 +94,48 @@ impl Formatter for TextFormatter {
 
     fn format_status(&self, status: &StatusInfo) -> String {
         let mut output = String::new();
-        writeln!(output, "Infrastructure Status").unwrap();
-        writeln!(output, "---------------------").unwrap();
+        writeln!(output, "Status").unwrap();
+        writeln!(output, "------").unwrap();
 
-        let embedding_status = if status.embedding_connected {
-            "[CONNECTED]"
+        let daemon_status = if status.daemon_running {
+            "[RUNNING]"
         } else {
-            "[DISCONNECTED]"
+            "[STOPPED]"
         };
-        writeln!(
-            output,
-            "Embedding:   {}  {}",
-            status.embedding_url, embedding_status
-        )
-        .unwrap();
-        if let Some(ref model) = status.embedding_model {
-            writeln!(output, "  Model:     {}", model).unwrap();
-        }
-        if status.embedding_connected {
-            writeln!(output, "  Status:    healthy").unwrap();
+        writeln!(output, "ML Daemon:     {}", daemon_status).unwrap();
+
+        if status.daemon_running {
+            if let Some(ref model) = status.embedding_model {
+                writeln!(output, "  Embedding:   {}", model).unwrap();
+            }
+            if let Some(idle) = status.daemon_idle_secs {
+                writeln!(output, "  Idle:        {}s", idle).unwrap();
+            }
+            if let Some(ref m) = status.metrics {
+                writeln!(output, "  Requests:    {}", m.total_requests).unwrap();
+                writeln!(output, "  Avg Latency: {}ms", m.avg_latency_ms).unwrap();
+                if m.error_rate > 0.0 {
+                    writeln!(output, "  Error Rate:  {:.1}%", m.error_rate).unwrap();
+                }
+            }
         }
         writeln!(output).unwrap();
 
-        let qdrant_status = if status.qdrant_connected {
+        let vector_status = if status.vector_store_connected {
             "[CONNECTED]"
         } else {
             "[DISCONNECTED]"
         };
         writeln!(
             output,
-            "Qdrant:      {}  {}",
-            status.qdrant_url, qdrant_status
+            "Vector Store:  {} ({})",
+            status.vector_store_driver, vector_status
         )
         .unwrap();
-        if status.qdrant_connected {
-            writeln!(output, "  Collection: {}", status.collection).unwrap();
-            writeln!(output, "  Points:    {}", status.qdrant_points).unwrap();
+        if status.vector_store_connected {
+            writeln!(output, "  URL:         {}", status.vector_store_url).unwrap();
+            writeln!(output, "  Collection:  {}", status.collection).unwrap();
+            writeln!(output, "  Points:      {}", status.vector_store_points).unwrap();
         }
 
         output
@@ -205,7 +205,6 @@ impl Formatter for TextFormatter {
     }
 }
 
-/// JSON formatter for machine-readable output.
 pub struct JsonFormatter {
     pub pretty: bool,
 }
@@ -227,17 +226,27 @@ impl Formatter for JsonFormatter {
     }
 
     fn format_status(&self, status: &StatusInfo) -> String {
+        let metrics = status.metrics.as_ref().map(|m| {
+            serde_json::json!({
+                "total_requests": m.total_requests,
+                "avg_latency_ms": m.avg_latency_ms,
+                "error_rate": m.error_rate,
+            })
+        });
+
         let json = serde_json::json!({
-            "embedding": {
-                "url": status.embedding_url,
-                "connected": status.embedding_connected,
-                "model": status.embedding_model,
+            "daemon": {
+                "running": status.daemon_running,
+                "idle_secs": status.daemon_idle_secs,
+                "embedding_model": status.embedding_model,
+                "metrics": metrics,
             },
-            "qdrant": {
-                "url": status.qdrant_url,
-                "connected": status.qdrant_connected,
+            "vector_store": {
+                "driver": status.vector_store_driver,
+                "url": status.vector_store_url,
+                "connected": status.vector_store_connected,
                 "collection": status.collection,
-                "points": status.qdrant_points,
+                "points": status.vector_store_points,
             }
         });
 
@@ -267,12 +276,7 @@ impl Formatter for JsonFormatter {
     fn format_tags(&self, tags: &[(String, u64)]) -> String {
         let json: Vec<serde_json::Value> = tags
             .iter()
-            .map(|(tag, count)| {
-                serde_json::json!({
-                    "tag": tag,
-                    "count": count,
-                })
-            })
+            .map(|(tag, count)| serde_json::json!({"tag": tag, "count": count}))
             .collect();
 
         if self.pretty {
@@ -330,7 +334,6 @@ impl Formatter for JsonFormatter {
     }
 }
 
-/// Markdown formatter for documentation-friendly output.
 pub struct MarkdownFormatter;
 
 impl Formatter for MarkdownFormatter {
@@ -366,29 +369,39 @@ impl Formatter for MarkdownFormatter {
 
     fn format_status(&self, status: &StatusInfo) -> String {
         let mut output = String::new();
-        writeln!(output, "## Infrastructure Status\n").unwrap();
+        writeln!(output, "## Status\n").unwrap();
 
-        let embedding_status = if status.embedding_connected {
-            "✅"
-        } else {
-            "❌"
-        };
-        writeln!(output, "### Embedding Server {}\n", embedding_status).unwrap();
-        writeln!(output, "- **URL:** `{}`", status.embedding_url).unwrap();
-        if let Some(ref model) = status.embedding_model {
-            writeln!(output, "- **Model:** {}", model).unwrap();
+        let daemon_status = if status.daemon_running { "✅" } else { "❌" };
+        writeln!(output, "### ML Daemon {}\n", daemon_status).unwrap();
+
+        if status.daemon_running {
+            if let Some(ref model) = status.embedding_model {
+                writeln!(output, "- **Embedding:** {}", model).unwrap();
+            }
+            if let Some(ref m) = status.metrics {
+                writeln!(output, "- **Requests:** {}", m.total_requests).unwrap();
+                writeln!(output, "- **Avg Latency:** {}ms", m.avg_latency_ms).unwrap();
+                if m.error_rate > 0.0 {
+                    writeln!(output, "- **Error Rate:** {:.1}%", m.error_rate).unwrap();
+                }
+            }
         }
         writeln!(output).unwrap();
 
-        let qdrant_status = if status.qdrant_connected {
+        let vector_status = if status.vector_store_connected {
             "✅"
         } else {
             "❌"
         };
-        writeln!(output, "### Qdrant {}\n", qdrant_status).unwrap();
-        writeln!(output, "- **URL:** `{}`", status.qdrant_url).unwrap();
+        writeln!(
+            output,
+            "### Vector Store ({}) {}\n",
+            status.vector_store_driver, vector_status
+        )
+        .unwrap();
+        writeln!(output, "- **URL:** `{}`", status.vector_store_url).unwrap();
         writeln!(output, "- **Collection:** {}", status.collection).unwrap();
-        writeln!(output, "- **Points:** {}", status.qdrant_points).unwrap();
+        writeln!(output, "- **Points:** {}", status.vector_store_points).unwrap();
 
         output
     }
@@ -462,7 +475,6 @@ impl Formatter for MarkdownFormatter {
     }
 }
 
-/// Get a formatter for the given output format.
 pub fn get_formatter(format: OutputFormat) -> Box<dyn Formatter> {
     match format {
         OutputFormat::Text => Box::new(TextFormatter),

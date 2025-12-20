@@ -7,7 +7,11 @@ REPO="junyeong-ai/semantic-search-cli"
 SKILL_NAME="semantic-search"
 PROJECT_SKILL_DIR=".claude/skills/$SKILL_NAME"
 USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
-CONFIG_DIR="$HOME/.config/ssearch"
+# Use XDG Base Directory or ~/.config for all platforms
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/semantic-search-cli"
+CACHE_DIR="$HOME/.cache/semantic-search-cli"
+MODELS_DIR="$CACHE_DIR/models"
+EMBEDDING_MODEL="JunyeongAI/qwen3-embedding-0.6b-onnx"
 
 detect_platform() {
     local os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -243,13 +247,6 @@ check_dependencies() {
         echo "  ⚠️  Docker: Not installed (required for Qdrant)" >&2
     fi
 
-    # Check Python (for embedding server)
-    if command -v python3 >/dev/null 2>&1; then
-        echo "  ✅ Python: $(python3 --version | cut -d' ' -f2)" >&2
-    else
-        echo "  ⚠️  Python3: Not installed (required for embedding server)" >&2
-    fi
-
     echo "" >&2
     return $missing
 }
@@ -265,6 +262,70 @@ setup_config() {
         fi
     else
         echo "ℹ️  Configuration already exists at $CONFIG_DIR" >&2
+    fi
+}
+
+# ============================================================================
+# Model Download
+# ============================================================================
+
+download_model_curl() {
+    local repo="$1"
+    local dir="$2"
+    local base_url="https://huggingface.co/$repo/resolve/main"
+
+    mkdir -p "$MODELS_DIR/$dir"
+
+    echo "  Downloading model.onnx..." >&2
+    curl -L --progress-bar "$base_url/model.onnx" -o "$MODELS_DIR/$dir/model.onnx"
+
+    echo "  Downloading model.onnx_data (~1.2GB)..." >&2
+    curl -L --progress-bar "$base_url/model.onnx_data" -o "$MODELS_DIR/$dir/model.onnx_data"
+
+    echo "  Downloading tokenizer.json..." >&2
+    curl -L --progress-bar "$base_url/tokenizer.json" -o "$MODELS_DIR/$dir/tokenizer.json"
+}
+
+download_models() {
+    echo "" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "🧠 ML Model Setup" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "" >&2
+
+    mkdir -p "$MODELS_DIR"
+
+    # Embedding model
+    local embed_dir="$MODELS_DIR/JunyeongAI--qwen3-embedding-0.6b-onnx"
+    if [ -f "$embed_dir/model.onnx" ] && [ -f "$embed_dir/model.onnx_data" ] && [ -f "$embed_dir/tokenizer.json" ]; then
+        echo "✅ Embedding model already downloaded" >&2
+    else
+        echo "Embedding: $EMBEDDING_MODEL (~1.2GB)" >&2
+        echo "" >&2
+        read -p "Download embedding model? [Y/n]: " choice
+        echo
+
+        case "$choice" in
+            n|N)
+                echo "⏭️  Skipped embedding model" >&2
+                ;;
+            *)
+                echo "📥 Downloading embedding model..." >&2
+                if command -v huggingface-cli >/dev/null 2>&1; then
+                    huggingface-cli download "$EMBEDDING_MODEL" \
+                        --local-dir "$embed_dir" \
+                        --include "model.onnx" "model.onnx_data" "tokenizer.json"
+                else
+                    download_model_curl "$EMBEDDING_MODEL" "JunyeongAI--qwen3-embedding-0.6b-onnx"
+                fi
+
+                if [ -f "$embed_dir/model.onnx" ] && [ -f "$embed_dir/model.onnx_data" ]; then
+                    echo "✅ Embedding model downloaded" >&2
+                else
+                    echo "⚠️  Download may have failed" >&2
+                fi
+                ;;
+        esac
     fi
 }
 
@@ -342,6 +403,7 @@ main() {
     fi
 
     setup_config
+    download_models
     prompt_skill_installation
 
     echo "" >&2
@@ -351,9 +413,8 @@ main() {
     echo "" >&2
     echo "Next steps:" >&2
     echo "" >&2
-    echo "1. Start infrastructure:" >&2
+    echo "1. Start Qdrant:" >&2
     echo "   docker-compose up -d qdrant" >&2
-    echo "   cd embedding-server && python server.py &" >&2
     echo "" >&2
     echo "2. Check status:         ssearch status" >&2
     echo "3. Index files:          ssearch index add <path>" >&2

@@ -1,181 +1,128 @@
 # Semantic Search CLI - AI Agent Developer Guide
 
-Essential knowledge for implementing features and debugging this Rust CLI tool.
+Rust CLI for semantic search. ONNX embeddings, Qdrant/PostgreSQL backends, async/await.
 
 ---
 
-## Architecture Overview
+## Architecture
 
 ```
 src/
-├── cli/commands/     # Command handlers (index, search, source, import)
-├── models/           # Document, Config, Source, Tag, Search
+├── main.rs              # CLI entry, command dispatch
+├── cli/commands/        # Command handlers (search, index, source, import)
+├── models/              # Data models (Config, Document, Tag, Search)
 ├── services/
-│   ├── batch.rs      # Shared batch processing (embed + store)
-│   ├── chunker.rs    # Text chunking with line tracking
-│   ├── embedding.rs  # Qwen3 embedding client (1024 dim)
-│   └── vector_store.rs    # Qdrant client
-├── sources/          # Data sources (local, jira, confluence, figma)
-└── utils/            # File utilities, retry logic
+│   ├── batch.rs         # Batch processing (embed + store)
+│   ├── chunker.rs       # Text chunking with line tracking
+│   ├── embedding.rs     # ONNX daemon client
+│   ├── metrics.rs       # SQLite metrics
+│   └── vector_store/    # Qdrant/PostgreSQL backends
+├── server/              # ML daemon (ONNX inference via Unix socket)
+├── client/              # Daemon IPC client
+├── sources/             # External sources (jira, confluence, figma)
+└── utils/               # File utils, retry logic
 ```
 
 ---
 
-## Core Patterns
+## Key Patterns
 
-### Dense Vector Search
-
-**Implementation** (`services/vector_store.rs`):
-- Qwen3 embeddings (1024 dimensions)
-- Cosine similarity scoring
-- Tag and source type filtering
-
+### ML Daemon
 ```rust
-pub async fn search(
-    &self,
-    query_vector: Vec<f32>,
-    limit: u64,
-    tags: &[Tag],
-    source_types: &[SourceType],
-    min_score: Option<f32>,
-) -> Result<Vec<SearchResult>, VectorStoreError>
+// server/mod.rs - Auto-starts on first request
+DaemonServer::new(config)
+  → loads ONNX model (~/.cache/semantic-search-cli/models/)
+  → listens on Unix socket (/tmp/ssearch.sock)
+  → idle timeout: 600s (configurable)
 ```
 
----
+### Vector Store
+```rust
+// services/vector_store/mod.rs - Factory pattern
+create_backend(&config) → Box<dyn VectorStore>
+// Trait: upsert, search, delete, count, collection_info
+```
 
 ### Batch Processing
-
-**Shared function** (`services/batch.rs`):
 ```rust
-pub async fn process_batch(
-    embedding_client: &EmbeddingClient,
-    vector_client: &VectorStoreClient,
-    chunks: &mut Vec<DocumentChunk>,
-    texts: &mut Vec<String>,
-) -> Result<()>
+// services/batch.rs - Used by index, source sync, import
+process_batch(embedding_client, vector_store, chunks, texts)
+  → embed texts in batches (8 per batch)
+  → upsert to vector store
 ```
 
-**Used by**: `index`, `source sync`, `import` commands.
-
----
-
-### Document Chunking
-
-**Implementation** (`services/chunker.rs`):
-- Character-based chunking (6000 chars default, 500 overlap)
-- Line number tracking for source location
-- Preserves context across chunk boundaries
-
----
-
-### External Source Sync
-
-**Pattern** (`sources/*.rs`):
-```
+### External Sources
+```rust
+// sources/*.rs - Pattern for all sources
 sync()
-├── --project → full project/space sync
-├── single ID → fetch_issue/fetch_page
-└── query → fetch_issues/fetch_pages
-    ├── limit → batch mode
-    └── no limit → streaming mode (--all --stream)
-```
+├── --project KEY --all → full sync (streaming)
+├── --project KEY --limit N → batch mode
+├── --query "ID" → single item
+└── --query "JQL/CQL" → query-based
 
-**CLI Options**:
-```bash
-ssearch source sync jira --project AKIT --all        # Full project (streaming)
-ssearch source sync jira --project AKIT --limit 100  # Batch mode
-ssearch source sync jira --query "AKIT-123"          # Single issue
-ssearch source sync confluence --project DOCS --all  # Full space (streaming)
-```
-
-**URL/ID Parsing**:
-```rust
-// Jira: PROJ-1234, https://...atlassian.net/browse/PROJ-1234
-fn extract_issue_key(query: &str) -> Option<String>
-
-// Confluence: 12345, https://...atlassian.net/wiki/.../pages/12345
-fn extract_page_id(query: &str) -> Option<String>
-
-// Figma: https://figma.com/design/xxx?node-id=123
-fn extract_file_key(query: &str) -> Option<String>
+// Uses atlassian-cli (jira, confluence) and figma-cli
 ```
 
 ---
 
-## Development Tasks
+## Adding Features
 
-### Add New Data Source
+### New Data Source
+1. `sources/newsource.rs`: Implement `new()`, `source_type()`, `check_available()`, `sync()`
+2. `models/source.rs`: Add `SourceType::NewSource`
+3. `sources/mod.rs`: Register in `get_data_source()`
 
-1. Create `sources/newsource.rs`
-2. Implement struct:
-   ```rust
-   pub fn new() -> Self
-   pub fn source_type(&self) -> SourceType
-   pub fn check_available(&self) -> Result<bool, SourceError>
-   pub fn sync(&self, options: SyncOptions) -> Result<Vec<Document>, SourceError>
-   ```
-3. Add variant to `models/source.rs`: `SourceType::NewSource`
-4. Register in `sources/mod.rs`: `get_data_source()`
+### New Search Filter
+1. `models/search.rs`: Add field to `SearchQuery`
+2. `cli/commands/search.rs`: Add CLI arg
+3. `services/vector_store/*.rs`: Implement filter
 
-### Add Search Filter
-
-1. Update `SearchQuery` in `models/search.rs`
-2. Add CLI arg in `cli/commands/search.rs`
-3. Implement filter in `vector_store.rs`
-
-### Add Document Field
-
-1. Update `DocumentMetadata` in `models/document.rs`
-2. Add to Qdrant payload in `vector_store.rs`
+### New Config Option
+1. `models/config.rs`: Add to struct with `#[serde(default)]`
 
 ---
 
-## Key Constants
+## Constants
 
 | Location | Constant | Value |
 |----------|----------|-------|
-| `services/vector_store.rs` | `EMBEDDING_DIM` | 1024 |
-| `models/config.rs` | `DEFAULT_EMBEDDING_URL` | `http://localhost:11411` |
-| `models/config.rs` | `DEFAULT_QDRANT_URL` | `http://localhost:16334` |
-| `models/config.rs` | `DEFAULT_COLLECTION` | `semantic_search` |
+| `services/vector_store/mod.rs` | EMBEDDING_DIM | 1024 |
+| `models/config.rs` | DEFAULT_QDRANT_URL | `http://localhost:16334` |
+| `models/config.rs` | DEFAULT_COLLECTION | `semantic_search` |
+| `models/config.rs` | DEFAULT_EMBEDDING_MODEL | `JunyeongAI/qwen3-embedding-0.6b-onnx` |
+| `services/chunker.rs` | chunk_size | 6000 chars |
+| `services/chunker.rs` | chunk_overlap | 500 chars |
 
 ---
 
-## Config Defaults
+## Common Tasks
 
-| Section | Key | Default |
-|---------|-----|---------|
-| embedding | url | `http://localhost:11411` |
-| embedding | timeout_secs | 120 |
-| embedding | batch_size | 8 |
-| vector_store | url | `http://localhost:16334` |
-| vector_store | collection | `semantic_search` |
-| indexing | chunk_size | 6000 |
-| indexing | chunk_overlap | 500 |
-| indexing | max_file_size | 10MB |
-| search | default_limit | 10 |
-| search | default_format | text |
-
----
-
-## Commands
-
+### Debug
 ```bash
-cargo test --release           # All tests
-cargo clippy -- -D warnings    # Lint
-cargo fmt                      # Format
+RUST_LOG=debug cargo run -- search "query"
+```
+
+### Inspect Database
+```bash
+# Qdrant
+curl http://localhost:16334/collections/semantic_search
+
+# Metrics SQLite
+sqlite3 ~/.cache/semantic-search-cli/metrics.db ".schema"
 ```
 
 ---
 
-## Common Issues
+## Test Commands
 
-| Issue | Check | Fix |
-|-------|-------|-----|
-| Embedding server down | `curl localhost:11411/health` | Restart Python server |
-| Qdrant not running | `docker ps` | `docker-compose up -d qdrant` |
-| No search results | `ssearch status` | Index documents first |
+```bash
+cargo test --release        # 47 tests
+cargo clippy -- -D warnings # Lint
+cargo fmt --check           # Format check
+```
 
 ---
 
-This guide contains implementation-critical knowledge only. For user documentation, see [README.md](README.md).
+## Config Path
+
+`~/.config/semantic-search-cli/config.toml` (XDG_CONFIG_HOME respected)

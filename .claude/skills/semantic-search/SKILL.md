@@ -2,97 +2,91 @@
 name: semantic-search
 version: 1.0.0
 description: |
-  Execute semantic searches via ssearch CLI. Search indexed local files, Jira issues,
-  Confluence pages, Figma designs. Use when user asks to find, search, or query documents.
+  Search local files, Jira issues, Confluence pages, and Figma designs using semantic similarity.
+  Use when user asks to find documents, search code, look up information, query indexed content,
+  or needs context from external sources like Jira tickets or Confluence documentation.
 allowed-tools: Bash
 ---
 
-# ssearch Command Reference
+# ssearch CLI
+
+Semantic search CLI for indexed content. Use `--format json` for parsing.
+
+## Quick Reference
 
 ```bash
-# Search indexed documents
-ssearch search <query> [--limit N] [--tags "key:value"] [--source type] [--format text|json|markdown]
+# Search
+ssearch search <query> [--limit N] [--tags "key:value"] [--source TYPE] [--format json]
 
 # Index local files
-ssearch index add <path> [--tags "key:value"] [-e "pattern"]
+ssearch index add <path> [--tags "key:value"]
 
-# Sync external sources (full project/space)
+# Sync external sources
 ssearch source sync jira --project <KEY> --all
 ssearch source sync confluence --project <SPACE> --all
+ssearch source sync figma --query "<URL>"
 
-# Sync external sources (query-based)
-ssearch source sync <type> --query "<query>" [--limit N] [--tags "key:value"]
-
-# Management
-ssearch status                    # Check infrastructure health
-ssearch tags list                 # List all indexed tags
-ssearch index clear -y            # Clear all indexed data
-ssearch source delete <type> -y   # Delete by source type
-ssearch tags delete <tag> -y      # Delete by tag
+# Status
+ssearch status
 ```
 
 ## Search Examples
 
 ```bash
-ssearch search "authentication flow"
-ssearch search "payment API" --tags "source:confluence" --limit 5
-ssearch search "user login" --source jira,confluence --format json
+# Basic search
+ssearch search "user authentication"
+
+# Filter by source
+ssearch search "payment API" --source jira
+
+# Filter by tag
+ssearch search "deployment" --tags "project:myapp"
+
+# JSON output for parsing
+ssearch search "error handling" --format json | jq '.[0].location'
 ```
 
-## External Source Types
+## External Source Sync
 
-| Type | Query Format | Examples |
-|------|--------------|----------|
-| `jira` | `--project KEY`, JQL, issue key, or URL | `--project MYPROJ --all`, `PROJ-1234` |
-| `confluence` | `--project SPACE`, CQL, page ID, or URL | `--project DOCS --all`, `12345678` |
-| `figma` | File URL with node-id | `https://figma.com/design/xxx?node-id=123-456` |
+| Source | Full Sync | Single Item |
+|--------|-----------|-------------|
+| Jira | `--project KEY --all` | `--query "PROJ-1234"` |
+| Confluence | `--project SPACE --all` | `--query "12345678"` |
+| Figma | - | `--query "https://figma.com/..."` |
 
-## Sync Examples
+## Search Options
 
-```bash
-# Jira - Full project sync (streaming)
-ssearch source sync jira --project MYPROJ --all
-ssearch source sync jira --project MYPROJ --limit 100
+| Option | Description |
+|--------|-------------|
+| `-n, --limit` | Result count (default: 10) |
+| `-t, --tags` | Filter by tags (`source:jira`, `project:main`) |
+| `-s, --source` | Filter by type (`local`, `jira`, `confluence`, `figma`) |
+| `--min-score` | Minimum similarity (0.0-1.0) |
+| `--format` | Output format (`text`, `json`, `markdown`) |
 
-# Jira - Query-based
-ssearch source sync jira --query "status=Done" --limit 20
-ssearch source sync jira --query "PROJ-1234"
+## Result Fields
 
-# Confluence - Full space sync (streaming)
-ssearch source sync confluence --project DOCS --all
-ssearch source sync confluence --project DOCS --limit 100
-
-# Confluence - Query-based
-ssearch source sync confluence --query "text~keyword" --limit 50
-
-# Figma (requires node-id for specific frame)
-ssearch source sync figma --query "https://figma.com/design/abc123?node-id=123-456"
+```json
+{
+  "score": 0.85,
+  "location": "/path/file.rs:10-25",
+  "tags": ["source:local", "lang:rust"],
+  "content": "matched text..."
+}
 ```
-
-## Tag Format
-
-Tags use `key:value` format. Multiple tags: `--tags "source:jira,project:payments"`
-
-Common auto-generated tags:
-- `source:local`, `source:jira`, `source:confluence`, `source:figma`
-- `lang:rust`, `lang:python`, `lang:typescript`
-- `jira-project:myproj`, `jira-status:in-progress`
-
-## Search Result Fields
-
-| Field | Description |
-|-------|-------------|
-| `score` | Relevance score (0.0-1.0, higher = better match) |
-| `location` | File path with line range or external URL |
-| `tags` | Associated metadata tags |
-| `content` | Matched text snippet |
 
 ## Prerequisites
 
-Before searching, infrastructure must be running:
+ML daemon auto-starts. Verify with:
 
-1. **Check status**: `ssearch status`
-2. **Qdrant**: `docker-compose up -d qdrant`
-3. **Embedding server**: `cd embedding-server && python server.py`
+```bash
+ssearch status
+# ML Daemon:     [RUNNING]
+# Vector Store:  [CONNECTED]
+```
 
-**Critical**: If `ssearch status` shows disconnected services, search will fail.
+If disconnected:
+```bash
+docker-compose up -d qdrant
+ssearch serve restart
+```

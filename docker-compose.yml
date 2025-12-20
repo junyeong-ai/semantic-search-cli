@@ -16,6 +16,26 @@ services:
       retries: 5
     restart: unless-stopped
 
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: ssearch-postgres
+    ports:
+      - "15432:5432"
+    volumes:
+      - ssearch_postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ssearch
+      POSTGRES_PASSWORD: ssearch
+      POSTGRES_DB: ssearch
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ssearch -d ssearch"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   ssearch_qdrant_storage:
+    driver: local
+  ssearch_postgres_data:
     driver: local

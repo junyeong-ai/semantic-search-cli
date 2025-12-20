@@ -11,7 +11,7 @@ use crate::cli::output::{IndexStats, get_formatter};
 use crate::models::{
     Config, Document, DocumentMetadata, OutputFormat, Source, SourceType, Tag, parse_tags,
 };
-use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
+use crate::services::{EmbeddingClient, TextChunker, create_backend, process_batch};
 
 /// Arguments for the import command.
 #[derive(Debug, Args)]
@@ -88,11 +88,11 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
     }
 
     // Initialize clients
-    let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
+    let embedding_client = EmbeddingClient::new(&config);
+    let vector_store = create_backend(&config.vector_store).await?;
 
     // Ensure collection exists
-    vector_client.create_collection().await?;
+    vector_store.create_collection().await?;
 
     // Create chunker
     let chunker = TextChunker::new(&config.indexing);
@@ -170,7 +170,7 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
         if pending_texts.len() >= batch_size {
             process_batch(
                 &embedding_client,
-                &vector_client,
+                vector_store.as_ref(),
                 &mut pending_chunks,
                 &mut pending_texts,
             )
@@ -182,7 +182,7 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
     if !pending_texts.is_empty() {
         process_batch(
             &embedding_client,
-            &vector_client,
+            vector_store.as_ref(),
             &mut pending_chunks,
             &mut pending_texts,
         )

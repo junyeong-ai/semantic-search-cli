@@ -5,7 +5,11 @@ BINARY_NAME="ssearch"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 SKILL_NAME="semantic-search"
 USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
-CONFIG_DIR="$HOME/.config/ssearch"
+# Use XDG Base Directory or ~/.config for all platforms
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/semantic-search-cli"
+CACHE_DIR="$HOME/.cache/semantic-search-cli"
+MODELS_DIR="$CACHE_DIR/models"
+METRICS_DB="$CACHE_DIR/metrics.db"
 
 echo "🗑️  Uninstalling Semantic Search CLI (ssearch)..."
 echo
@@ -129,6 +133,48 @@ else
 fi
 
 # ============================================================================
+# Models & Metrics Cleanup
+# ============================================================================
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🧠 ML Models & Data Cleanup"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+if [ -d "$MODELS_DIR" ]; then
+    size=$(du -sh "$MODELS_DIR" 2>/dev/null | cut -f1)
+    echo "Models found at: $MODELS_DIR ($size)"
+    echo ""
+    read -p "Remove downloaded models? [y/N]: " choice
+    echo
+
+    case "$choice" in
+        y|Y)
+            rm -rf "$MODELS_DIR"
+            echo "✅ Removed models"
+            ;;
+        *)
+            echo "⏭️  Kept models"
+            ;;
+    esac
+else
+    echo "⚠️  Models not found at: $MODELS_DIR"
+fi
+
+if [ -f "$METRICS_DB" ]; then
+    echo ""
+    rm -f "$METRICS_DB"
+    echo "✅ Removed metrics database"
+fi
+
+# Cleanup empty cache directory
+if [ -d "$CACHE_DIR" ] && [ -z "$(ls -A "$CACHE_DIR")" ]; then
+    rmdir "$CACHE_DIR"
+    echo "   Cleaned up empty cache directory"
+fi
+
+# ============================================================================
 # Final Message
 # ============================================================================
 
@@ -140,7 +186,6 @@ echo ""
 echo "Remaining items (not automatically removed):"
 echo "  • Project-level skill: ./.claude/skills/$SKILL_NAME"
 echo "  • Qdrant data in Docker volumes (docker-compose down -v to remove)"
-echo "  • Embedding server process (pkill -f 'python.*server.py')"
 echo ""
 echo "To reinstall: ./scripts/install.sh"
 echo ""
