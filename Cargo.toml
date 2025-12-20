@@ -28,8 +28,8 @@ anyhow = "1.0"
 # Vector database
 qdrant-client = "1.15"
 
-# PostgreSQL + pgvector
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+# PostgreSQL + pgvector (no MySQL to avoid rsa vulnerability)
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
 pgvector = { version = "0.4", features = ["sqlx"] }
 
 # Async trait

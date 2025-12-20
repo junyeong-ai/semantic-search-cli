@@ -1,0 +1,12 @@
+# Security audit configuration
+# https://rustsec.org/
+
+[advisories]
+# Ignore rsa vulnerability - only affects MySQL authentication, we use PostgreSQL only
+# sqlx-macros-core includes all DB drivers for compile-time SQL verification
+ignore = [
+    "RUSTSEC-2023-0071",  # rsa: Marvin Attack (MySQL only, not used)
+]
+
+# Treat unmaintained crates as warnings, not errors
+informational_warnings = ["unmaintained"]
