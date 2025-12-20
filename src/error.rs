@@ -1,10 +1,7 @@
-//! Error types for the semantic search CLI.
-
 use thiserror::Error;
 
 use crate::utils::retry::Retryable;
 
-/// Errors related to tag parsing and validation.
 #[derive(Debug, Error)]
 pub enum TagError {
     #[error("invalid tag key: {0}")]
@@ -17,51 +14,84 @@ pub enum TagError {
     ParseError(String),
 }
 
-/// Errors related to embedding operations.
+#[derive(Debug, Error)]
+pub enum ModelError {
+    #[error("model not found: {0}")]
+    NotFound(String),
+
+    #[error("model load error: {0}")]
+    LoadError(String),
+
+    #[error("tokenizer error: {0}")]
+    TokenizerError(String),
+
+    #[error("inference error: {0}")]
+    InferenceError(String),
+
+    #[error("download error: {0}")]
+    DownloadError(String),
+}
+
+#[derive(Debug, Error)]
+pub enum DaemonError {
+    #[error("daemon not running")]
+    NotRunning,
+
+    #[error("daemon already running")]
+    AlreadyRunning,
+
+    #[error("connection failed: {0}")]
+    ConnectionFailed(String),
+
+    #[error("socket error: {0}")]
+    SocketError(String),
+
+    #[error("protocol error: {0}")]
+    ProtocolError(String),
+
+    #[error("spawn error: {0}")]
+    SpawnError(String),
+
+    #[error("timeout")]
+    Timeout,
+
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+}
+
+impl Retryable for DaemonError {
+    fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            DaemonError::ConnectionFailed(_) | DaemonError::Timeout | DaemonError::NotRunning
+        )
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum EmbeddingError {
-    #[error("failed to connect to embedding server: {0}")]
-    ConnectionError(String),
+    #[error("daemon error: {0}")]
+    DaemonError(#[from] DaemonError),
 
-    #[error("embedding server error: {0}")]
-    ServerError(String),
+    #[error("model error: {0}")]
+    ModelError(#[from] ModelError),
 
-    #[error("embedding request failed: {0}")]
-    RequestError(#[from] reqwest::Error),
-
-    #[error("invalid embedding response: {0}")]
+    #[error("invalid response: {0}")]
     InvalidResponse(String),
-
-    #[error("embedding timeout")]
-    Timeout,
 }
 
 impl Retryable for EmbeddingError {
     fn is_retryable(&self) -> bool {
         match self {
-            // Connection and timeout errors are retryable
-            EmbeddingError::ConnectionError(_) | EmbeddingError::Timeout => true,
-            // Server errors might be transient (e.g., 503 Service Unavailable)
-            EmbeddingError::ServerError(msg) => {
-                msg.contains("503")
-                    || msg.contains("502")
-                    || msg.contains("504")
-                    || msg.contains("429")
-                    || msg.to_lowercase().contains("unavailable")
-                    || msg.to_lowercase().contains("too many requests")
-            }
-            // Request errors depend on the underlying cause
-            EmbeddingError::RequestError(e) => e.is_timeout() || e.is_connect(),
-            // Invalid responses are not retryable
-            EmbeddingError::InvalidResponse(_) => false,
+            EmbeddingError::DaemonError(e) => e.is_retryable(),
+            _ => false,
         }
     }
 }
 
-/// Errors related to vector store operations.
 #[derive(Debug, Error)]
 pub enum VectorStoreError {
-    #[error("failed to connect to Qdrant: {0}")]
+    #[error("connection error: {0}")]
     ConnectionError(String),
 
     #[error("collection error: {0}")]
@@ -76,32 +106,43 @@ pub enum VectorStoreError {
     #[error("delete error: {0}")]
     DeleteError(String),
 
-    #[error("Qdrant client error: {0}")]
+    #[error("client error: {0}")]
     ClientError(String),
+
+    #[error("PostgreSQL error: {0}")]
+    PostgresError(String),
+
+    #[error("pgvector extension not installed: {0}")]
+    PgVectorExtensionError(String),
+
+    #[error("unsupported backend: {0}")]
+    UnsupportedBackend(String),
 }
 
 impl Retryable for VectorStoreError {
     fn is_retryable(&self) -> bool {
         match self {
-            // Connection errors are always retryable
             VectorStoreError::ConnectionError(_) => true,
-            // Other errors might be transient
+            VectorStoreError::PostgresError(msg) => {
+                let msg_lower = msg.to_lowercase();
+                msg_lower.contains("timeout")
+                    || msg_lower.contains("connection")
+                    || msg_lower.contains("unavailable")
+            }
+            VectorStoreError::PgVectorExtensionError(_)
+            | VectorStoreError::UnsupportedBackend(_) => false,
             VectorStoreError::CollectionError(msg)
             | VectorStoreError::UpsertError(msg)
             | VectorStoreError::SearchError(msg)
             | VectorStoreError::DeleteError(msg)
             | VectorStoreError::ClientError(msg) => {
                 let msg_lower = msg.to_lowercase();
-                msg_lower.contains("timeout")
-                    || msg_lower.contains("connection")
-                    || msg_lower.contains("unavailable")
-                    || msg_lower.contains("too many")
+                msg_lower.contains("timeout") || msg_lower.contains("connection")
             }
         }
     }
 }
 
-/// Errors related to indexing operations.
 #[derive(Debug, Error)]
 pub enum IndexError {
     #[error("file read error: {0}")]
@@ -123,7 +164,6 @@ pub enum IndexError {
     NoFilesFound,
 }
 
-/// Errors related to configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("IO error: {0}")]
@@ -142,7 +182,6 @@ pub enum ConfigError {
     ValidationError(String),
 }
 
-/// Errors related to data source operations.
 #[derive(Debug, Error)]
 pub enum SourceError {
     #[error("CLI not found: {0}")]
@@ -161,7 +200,6 @@ pub enum SourceError {
     UnsupportedSource(String),
 }
 
-/// Errors related to import operations.
 #[derive(Debug, Error)]
 pub enum ImportError {
     #[error("IO error: {0}")]
@@ -177,7 +215,6 @@ pub enum ImportError {
     NoDocuments,
 }
 
-/// Errors related to search operations.
 #[derive(Debug, Error)]
 pub enum SearchError {
     #[error("embedding error: {0}")]
@@ -190,7 +227,6 @@ pub enum SearchError {
     InvalidQuery(String),
 }
 
-/// Application-level errors that wrap domain errors.
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("tag error: {0}")]
@@ -211,8 +247,11 @@ pub enum AppError {
     #[error("import error: {0}")]
     Import(#[from] ImportError),
 
-    #[error("infrastructure not running: {0}")]
-    InfrastructureError(String),
+    #[error("daemon error: {0}")]
+    Daemon(#[from] DaemonError),
+
+    #[error("model error: {0}")]
+    Model(#[from] ModelError),
 
     #[error("{0}")]
     Other(String),

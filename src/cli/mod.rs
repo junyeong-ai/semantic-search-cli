@@ -1,5 +1,3 @@
-//! CLI module for the semantic search CLI.
-
 pub mod commands;
 pub mod output;
 
@@ -7,7 +5,6 @@ use clap::{Parser, Subcommand};
 
 use crate::models::OutputFormat;
 
-/// Semantic search CLI for local files and external data sources.
 #[derive(Debug, Parser)]
 #[command(name = "ssearch")]
 #[command(author, version, about, long_about = None)]
@@ -28,10 +25,9 @@ pub struct Cli {
     pub command: Commands,
 }
 
-/// Available subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Check infrastructure status (embedding server, Qdrant)
+    /// Check infrastructure status
     Status,
 
     /// Manage search index (add, delete, clear)
@@ -55,6 +51,7 @@ pub enum Commands {
     /// Manage external data sources
     #[command(subcommand)]
     Source(commands::SourceCommand),
-}
 
-// FromStr is implemented in models::search
+    /// Manage ML daemon server
+    Serve(commands::ServeArgs),
+}

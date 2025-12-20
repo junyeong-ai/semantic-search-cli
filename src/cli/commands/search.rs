@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::cli::output::get_formatter;
 use crate::models::{Config, OutputFormat, SearchResults, SourceType, Tag, parse_tags};
-use crate::services::{EmbeddingClient, VectorStoreClient};
+use crate::services::{EmbeddingClient, create_backend};
 
 #[derive(Debug, Args)]
 pub struct SearchArgs {
@@ -89,8 +89,8 @@ pub async fn handle_search(args: SearchArgs, format: OutputFormat, verbose: bool
         }
     }
 
-    let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
+    let embedding_client = EmbeddingClient::new(&config);
+    let vector_store = create_backend(&config.vector_store).await?;
 
     let embed_start = Instant::now();
     let query_embedding = embedding_client
@@ -100,7 +100,7 @@ pub async fn handle_search(args: SearchArgs, format: OutputFormat, verbose: bool
     let embed_ms = embed_start.elapsed().as_millis();
 
     let search_start = Instant::now();
-    let results = vector_client
+    let mut results = vector_store
         .search(
             query_embedding,
             u64::from(limit),
@@ -111,6 +111,8 @@ pub async fn handle_search(args: SearchArgs, format: OutputFormat, verbose: bool
         .await
         .context("search failed")?;
     let search_ms = search_start.elapsed().as_millis();
+
+    results.truncate(limit as usize);
 
     if verbose {
         let total_ms = start_time.elapsed().as_millis();

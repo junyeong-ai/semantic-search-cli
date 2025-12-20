@@ -1,10 +1,45 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::path::PathBuf;
+use std::str::FromStr;
 
 use super::search::OutputFormat;
 
-pub const DEFAULT_EMBEDDING_URL: &str = "http://localhost:11411";
 pub const DEFAULT_QDRANT_URL: &str = "http://localhost:16334";
 pub const DEFAULT_COLLECTION: &str = "semantic_search";
+pub const DEFAULT_EMBEDDING_MODEL: &str = "JunyeongAI/qwen3-embedding-0.6b-onnx";
+pub const DEFAULT_EMBEDDING_DIMENSION: u32 = 1024;
+pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 600;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorDriver {
+    #[default]
+    Qdrant,
+    #[serde(alias = "postgres")]
+    PostgreSQL,
+}
+
+impl fmt::Display for VectorDriver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VectorDriver::Qdrant => write!(f, "qdrant"),
+            VectorDriver::PostgreSQL => write!(f, "postgresql"),
+        }
+    }
+}
+
+impl FromStr for VectorDriver {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "qdrant" => Ok(VectorDriver::Qdrant),
+            "postgresql" | "postgres" | "pg" => Ok(VectorDriver::PostgreSQL),
+            _ => Err(format!("unknown vector driver: {}", s)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -19,11 +54,26 @@ pub struct Config {
 
     #[serde(default)]
     pub search: SearchConfig,
+
+    #[serde(default)]
+    pub daemon: DaemonConfig,
+
+    #[serde(default)]
+    pub metrics: MetricsConfig,
 }
 
 impl Config {
-    pub fn config_path() -> Option<std::path::PathBuf> {
-        dirs::config_dir().map(|p| p.join("semantic-search-cli").join("config.toml"))
+    pub fn config_path() -> Option<PathBuf> {
+        // Use XDG Base Directory or ~/.config for all platforms
+        std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|home| PathBuf::from(home).join(".config"))
+            })
+            .map(|p| p.join("semantic-search-cli").join("config.toml"))
     }
 
     pub fn load() -> Result<Self, crate::error::ConfigError> {
@@ -50,26 +100,53 @@ impl Config {
         std::fs::write(&path, content)?;
         Ok(())
     }
+
+    pub fn cache_dir() -> Option<PathBuf> {
+        dirs::home_dir().map(|p| p.join(".cache").join("semantic-search-cli"))
+    }
+
+    pub fn models_dir() -> Option<PathBuf> {
+        Self::cache_dir().map(|p| p.join("models"))
+    }
+
+    pub fn socket_path(&self) -> PathBuf {
+        self.daemon
+            .socket_path
+            .clone()
+            .unwrap_or_else(default_socket_path)
+    }
+
+    pub fn pid_path(&self) -> PathBuf {
+        let socket = self.socket_path();
+        socket.with_extension("pid")
+    }
+
+    pub fn metrics_db_path() -> Option<PathBuf> {
+        Self::cache_dir().map(|p| p.join("metrics.db"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
-    #[serde(default = "default_embedding_url")]
-    pub url: String,
+    #[serde(default = "default_embedding_model")]
+    pub model_id: String,
 
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    #[serde(default)]
+    pub model_path: Option<PathBuf>,
+
+    #[serde(default = "default_embedding_dimension")]
+    pub dimension: u32,
 
     #[serde(default = "default_batch_size")]
     pub batch_size: u32,
 }
 
-fn default_embedding_url() -> String {
-    DEFAULT_EMBEDDING_URL.to_string()
+fn default_embedding_model() -> String {
+    DEFAULT_EMBEDDING_MODEL.to_string()
 }
 
-fn default_timeout() -> u64 {
-    120
+fn default_embedding_dimension() -> u32 {
+    DEFAULT_EMBEDDING_DIMENSION
 }
 
 fn default_batch_size() -> u32 {
@@ -79,8 +156,9 @@ fn default_batch_size() -> u32 {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            url: default_embedding_url(),
-            timeout_secs: default_timeout(),
+            model_id: default_embedding_model(),
+            model_path: None,
+            dimension: default_embedding_dimension(),
             batch_size: default_batch_size(),
         }
     }
@@ -88,14 +166,26 @@ impl Default for EmbeddingConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorStoreConfig {
+    #[serde(default)]
+    pub driver: VectorDriver,
+
     #[serde(default = "default_qdrant_url")]
     pub url: String,
 
     #[serde(default = "default_collection")]
     pub collection: String,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub schema: Option<String>,
+
+    #[serde(default)]
     pub api_key: Option<String>,
+
+    #[serde(default = "default_pool_max")]
+    pub pool_max: u32,
+
+    #[serde(default = "default_pool_acquire_timeout")]
+    pub pool_acquire_timeout: u32,
 }
 
 fn default_qdrant_url() -> String {
@@ -106,12 +196,35 @@ fn default_collection() -> String {
     DEFAULT_COLLECTION.to_string()
 }
 
+fn default_pool_max() -> u32 {
+    10
+}
+
+fn default_pool_acquire_timeout() -> u32 {
+    30
+}
+
 impl Default for VectorStoreConfig {
     fn default() -> Self {
         Self {
+            driver: VectorDriver::default(),
             url: default_qdrant_url(),
             collection: default_collection(),
+            schema: None,
             api_key: None,
+            pool_max: default_pool_max(),
+            pool_acquire_timeout: default_pool_acquire_timeout(),
+        }
+    }
+}
+
+impl VectorStoreConfig {
+    /// Get the fully qualified table name for PostgreSQL.
+    /// Returns "schema.collection" if schema is set, otherwise just "collection".
+    pub fn qualified_table_name(&self) -> String {
+        match &self.schema {
+            Some(schema) => format!("{}.{}", schema, self.collection),
+            None => self.collection.clone(),
         }
     }
 }
@@ -199,6 +312,68 @@ impl Default for SearchConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonConfig {
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_secs: u64,
+
+    #[serde(default = "default_auto_start")]
+    pub auto_start: bool,
+
+    #[serde(default)]
+    pub socket_path: Option<PathBuf>,
+}
+
+fn default_idle_timeout() -> u64 {
+    DEFAULT_IDLE_TIMEOUT_SECS
+}
+
+fn default_auto_start() -> bool {
+    true
+}
+
+fn default_socket_path() -> PathBuf {
+    std::env::temp_dir().join("ssearch.sock")
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: default_idle_timeout(),
+            auto_start: default_auto_start(),
+            socket_path: None,
+        }
+    }
+}
+
+pub const DEFAULT_METRICS_RETENTION_DAYS: u32 = 30;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default = "default_metrics_enabled")]
+    pub enabled: bool,
+
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u32,
+}
+
+fn default_metrics_enabled() -> bool {
+    true
+}
+
+fn default_retention_days() -> u32 {
+    DEFAULT_METRICS_RETENTION_DAYS
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_metrics_enabled(),
+            retention_days: default_retention_days(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,28 +381,14 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = Config::default();
-        assert_eq!(config.embedding.url, DEFAULT_EMBEDDING_URL);
+        assert_eq!(config.embedding.model_id, DEFAULT_EMBEDDING_MODEL);
         assert_eq!(config.vector_store.url, DEFAULT_QDRANT_URL);
-        assert_eq!(config.vector_store.collection, DEFAULT_COLLECTION);
     }
 
     #[test]
-    fn test_config_path() {
-        let path = Config::config_path();
-        assert!(path.is_some());
-    }
-
-    #[test]
-    fn test_embedding_config_default() {
-        let config = EmbeddingConfig::default();
-        assert_eq!(config.timeout_secs, 120);
-        assert_eq!(config.batch_size, 8);
-    }
-
-    #[test]
-    fn test_indexing_config_default() {
-        let config = IndexingConfig::default();
-        assert!(!config.exclude_patterns.is_empty());
-        assert!(config.max_file_size > 0);
+    fn test_daemon_config_default() {
+        let config = DaemonConfig::default();
+        assert_eq!(config.idle_timeout_secs, DEFAULT_IDLE_TIMEOUT_SECS);
+        assert!(config.auto_start);
     }
 }

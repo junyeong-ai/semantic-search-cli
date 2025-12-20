@@ -1,11 +1,15 @@
 use anyhow::{Context, Result};
 
 use crate::models::DocumentChunk;
-use crate::services::{EmbeddingClient, VectorStoreClient};
+use crate::services::{EmbeddingClient, VectorStore};
 
-pub async fn process_batch(
+/// Process a batch of document chunks: generate embeddings and store in vector store.
+///
+/// This function accepts any backend that implements the VectorStore trait,
+/// enabling backend-agnostic batch processing.
+pub async fn process_batch<V: VectorStore + ?Sized>(
     embedding_client: &EmbeddingClient,
-    vector_client: &VectorStoreClient,
+    vector_store: &V,
     chunks: &mut Vec<DocumentChunk>,
     texts: &mut Vec<String>,
 ) -> Result<()> {
@@ -22,7 +26,7 @@ pub async fn process_batch(
         chunk.dense_vector = embedding;
     }
 
-    vector_client
+    vector_store
         .upsert_points(std::mem::take(chunks))
         .await
         .context("failed to store chunks")?;

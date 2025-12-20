@@ -1,3 +1,6 @@
+//! Qdrant vector store backend implementation.
+
+use async_trait::async_trait;
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
@@ -6,18 +9,20 @@ use qdrant_client::qdrant::{
 };
 use std::collections::HashMap;
 
+use super::{CollectionInfo, DEFAULT_EMBEDDING_DIM, VectorStore};
 use crate::error::VectorStoreError;
 use crate::models::{DocumentChunk, SearchResult, Source, SourceType, Tag, VectorStoreConfig};
 
-pub const EMBEDDING_DIM: u64 = 1024;
-
-pub struct VectorStoreClient {
+/// Qdrant vector store backend.
+pub struct QdrantBackend {
     client: Qdrant,
     collection: String,
+    embedding_dim: u64,
 }
 
-impl VectorStoreClient {
-    pub fn new(config: &VectorStoreConfig) -> Result<Self, VectorStoreError> {
+impl QdrantBackend {
+    /// Create a new Qdrant backend from configuration with custom embedding dimension.
+    pub fn new(config: &VectorStoreConfig, embedding_dim: u64) -> Result<Self, VectorStoreError> {
         let mut builder = Qdrant::from_url(&config.url);
 
         if let Some(ref api_key) = config.api_key {
@@ -31,14 +36,41 @@ impl VectorStoreClient {
         Ok(Self {
             client,
             collection: config.collection.clone(),
+            embedding_dim,
         })
     }
 
+    /// Create a backend with default configuration.
     pub fn with_defaults() -> Result<Self, VectorStoreError> {
-        Self::new(&VectorStoreConfig::default())
+        Self::new(&VectorStoreConfig::default(), DEFAULT_EMBEDDING_DIM)
     }
 
-    pub async fn health_check(&self) -> Result<bool, VectorStoreError> {
+    fn build_search_filter(tags: &[Tag], source_types: &[SourceType]) -> Option<Filter> {
+        let mut must_conditions: Vec<Condition> = Vec::new();
+
+        for tag in tags {
+            must_conditions.push(Condition::matches("tags", tag.to_payload_string()));
+        }
+
+        if !source_types.is_empty() {
+            let source_conditions: Vec<Condition> = source_types
+                .iter()
+                .map(|st| Condition::matches("source_type", st.to_string()))
+                .collect();
+            must_conditions.push(Filter::should(source_conditions).into());
+        }
+
+        if must_conditions.is_empty() {
+            None
+        } else {
+            Some(Filter::must(must_conditions))
+        }
+    }
+}
+
+#[async_trait]
+impl VectorStore for QdrantBackend {
+    async fn health_check(&self) -> Result<bool, VectorStoreError> {
         self.client
             .health_check()
             .await
@@ -46,7 +78,7 @@ impl VectorStoreClient {
             .map_err(|e| VectorStoreError::ConnectionError(e.to_string()))
     }
 
-    pub async fn get_collection_info(&self) -> Result<Option<CollectionInfo>, VectorStoreError> {
+    async fn get_collection_info(&self) -> Result<Option<CollectionInfo>, VectorStoreError> {
         match self.client.collection_info(&self.collection).await {
             Ok(info) => Ok(Some(CollectionInfo {
                 points_count: info.result.map_or(0, |r| r.points_count.unwrap_or(0)),
@@ -62,13 +94,14 @@ impl VectorStoreClient {
         }
     }
 
-    pub async fn create_collection(&self) -> Result<(), VectorStoreError> {
+    async fn create_collection(&self) -> Result<(), VectorStoreError> {
         if self.get_collection_info().await?.is_some() {
             return Ok(());
         }
 
-        let create_collection = CreateCollectionBuilder::new(&self.collection)
-            .vectors_config(VectorParamsBuilder::new(EMBEDDING_DIM, Distance::Cosine));
+        let create_collection = CreateCollectionBuilder::new(&self.collection).vectors_config(
+            VectorParamsBuilder::new(self.embedding_dim, Distance::Cosine),
+        );
 
         self.client
             .create_collection(create_collection)
@@ -78,7 +111,7 @@ impl VectorStoreClient {
         Ok(())
     }
 
-    pub async fn upsert_points(&self, chunks: Vec<DocumentChunk>) -> Result<(), VectorStoreError> {
+    async fn upsert_points(&self, chunks: Vec<DocumentChunk>) -> Result<(), VectorStoreError> {
         if chunks.is_empty() {
             return Ok(());
         }
@@ -132,7 +165,7 @@ impl VectorStoreClient {
         Ok(())
     }
 
-    pub async fn search(
+    async fn search(
         &self,
         query_vector: Vec<f32>,
         limit: u64,
@@ -277,7 +310,7 @@ impl VectorStoreClient {
         Ok(search_results)
     }
 
-    pub async fn delete_by_tags(&self, tags: &[Tag]) -> Result<(), VectorStoreError> {
+    async fn delete_by_tags(&self, tags: &[Tag]) -> Result<(), VectorStoreError> {
         if tags.is_empty() {
             return Ok(());
         }
@@ -298,7 +331,7 @@ impl VectorStoreClient {
         Ok(())
     }
 
-    pub async fn delete_by_document_ids(
+    async fn delete_by_document_ids(
         &self,
         document_ids: &[String],
     ) -> Result<(), VectorStoreError> {
@@ -322,7 +355,7 @@ impl VectorStoreClient {
         Ok(())
     }
 
-    pub async fn clear_collection(&self) -> Result<(), VectorStoreError> {
+    async fn clear_collection(&self) -> Result<(), VectorStoreError> {
         if self.get_collection_info().await?.is_none() {
             return Ok(());
         }
@@ -337,10 +370,7 @@ impl VectorStoreClient {
         Ok(())
     }
 
-    pub async fn delete_by_source_type(
-        &self,
-        source_type: SourceType,
-    ) -> Result<(), VectorStoreError> {
+    async fn delete_by_source_type(&self, source_type: SourceType) -> Result<(), VectorStoreError> {
         let source_type_str = source_type.to_string();
         let source_tag = format!("source:{}", source_type_str);
 
@@ -358,11 +388,7 @@ impl VectorStoreClient {
         Ok(())
     }
 
-    pub fn collection(&self) -> &str {
-        &self.collection
-    }
-
-    pub async fn list_all_tags(&self) -> Result<Vec<(String, u64)>, VectorStoreError> {
+    async fn list_all_tags(&self) -> Result<Vec<(String, u64)>, VectorStoreError> {
         let mut tag_counts: HashMap<String, u64> = HashMap::new();
         let mut offset: Option<qdrant_client::qdrant::PointId> = None;
         let batch_size = 100u32;
@@ -417,40 +443,7 @@ impl VectorStoreClient {
         Ok(tags)
     }
 
-    fn build_search_filter(tags: &[Tag], source_types: &[SourceType]) -> Option<Filter> {
-        let mut must_conditions: Vec<Condition> = Vec::new();
-
-        for tag in tags {
-            must_conditions.push(Condition::matches("tags", tag.to_payload_string()));
-        }
-
-        if !source_types.is_empty() {
-            let source_conditions: Vec<Condition> = source_types
-                .iter()
-                .map(|st| Condition::matches("source_type", st.to_string()))
-                .collect();
-            must_conditions.push(Filter::should(source_conditions).into());
-        }
-
-        if must_conditions.is_empty() {
-            None
-        } else {
-            Some(Filter::must(must_conditions))
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CollectionInfo {
-    pub points_count: u64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_embedding_dim() {
-        assert_eq!(EMBEDDING_DIM, 1024);
+    fn collection(&self) -> &str {
+        &self.collection
     }
 }

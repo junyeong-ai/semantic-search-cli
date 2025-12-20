@@ -5,7 +5,7 @@ use clap::Subcommand;
 
 use crate::cli::output::get_formatter;
 use crate::models::{Config, OutputFormat, Tag};
-use crate::services::VectorStoreClient;
+use crate::services::create_backend;
 
 /// Tags subcommands.
 #[derive(Debug, Subcommand)]
@@ -49,9 +49,9 @@ async fn handle_list(
     config: &Config,
     _verbose: bool,
 ) -> Result<()> {
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
+    let vector_store = create_backend(&config.vector_store).await?;
 
-    let info = vector_client.get_collection_info().await?;
+    let info = vector_store.get_collection_info().await?;
     if info.is_none() {
         println!(
             "{}",
@@ -60,7 +60,7 @@ async fn handle_list(
         return Ok(());
     }
 
-    let tags = vector_client
+    let tags = vector_store
         .list_all_tags()
         .await
         .context("failed to list tags")?;
@@ -110,8 +110,8 @@ async fn handle_delete(
     }
 
     // Delete
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
-    vector_client
+    let vector_store = create_backend(&config.vector_store).await?;
+    vector_store
         .delete_by_tags(std::slice::from_ref(&tag))
         .await
         .context("failed to delete documents")?;

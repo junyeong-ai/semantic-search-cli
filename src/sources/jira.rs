@@ -81,37 +81,57 @@ impl JiraSource {
     }
 
     pub fn sync(&self, options: SyncOptions) -> Result<Vec<Document>, SourceError> {
+        let mut documents = Vec::new();
+        self.sync_streaming(options, |doc| {
+            documents.push(doc);
+            Ok(())
+        })?;
+        Ok(documents)
+    }
+
+    pub fn sync_streaming<F>(
+        &self,
+        options: SyncOptions,
+        mut on_document: F,
+    ) -> Result<u64, SourceError>
+    where
+        F: FnMut(Document) -> Result<(), SourceError>,
+    {
         if !self.check_available()? {
             return Err(SourceError::CliNotFound(
                 "atlassian-cli not found. Install with: cargo install atlassian-cli".to_string(),
             ));
         }
 
-        // --project → sync entire project
         if let Some(ref project) = options.project {
             let jql = format!("project={}", project);
-            return self.fetch_issues(&jql, &options);
+            return self.fetch_issues_streaming(&jql, &options, on_document);
         }
 
         let query = options.query.as_deref().unwrap_or("ORDER BY updated DESC");
 
-        // Direct issue key → fetch single issue
         if let Some(issue_key) = extract_issue_key(query) {
-            return self
-                .fetch_issue(&issue_key, &options.tags)
-                .map(|doc| vec![doc]);
+            let doc = self.fetch_issue(&issue_key, &options.tags)?;
+            on_document(doc)?;
+            return Ok(1);
         }
 
-        // JQL query
-        self.fetch_issues(query, &options)
+        self.fetch_issues_streaming(query, &options, on_document)
     }
 
-    fn fetch_issues(&self, jql: &str, options: &SyncOptions) -> Result<Vec<Document>, SourceError> {
-        if options.limit.is_some() {
-            return self.fetch_issues_batch(jql, options);
+    fn fetch_issues_streaming<F>(
+        &self,
+        jql: &str,
+        options: &SyncOptions,
+        mut on_document: F,
+    ) -> Result<u64, SourceError>
+    where
+        F: FnMut(Document) -> Result<(), SourceError>,
+    {
+        if let Some(limit) = options.limit {
+            return self.fetch_issues_batch(jql, options, on_document, limit);
         }
 
-        // Streaming mode (--all --stream)
         let args = [
             "jira", "search", jql, "--format", "markdown", "--all", "--stream",
         ];
@@ -131,8 +151,8 @@ impl JiraSource {
             .ok_or_else(|| SourceError::ExecutionError("failed to capture stdout".to_string()))?;
 
         let reader = BufReader::new(stdout);
-        let mut documents = Vec::new();
-        let mut skipped = 0;
+        let mut count = 0u64;
+        let mut skipped = 0u64;
 
         for line in reader.lines() {
             let line = match line {
@@ -147,9 +167,10 @@ impl JiraSource {
 
             match self.issue_to_document(issue, &options.tags) {
                 Ok(doc) => {
-                    documents.push(doc);
-                    if documents.len() % 50 == 0 {
-                        eprintln!("  Processed {} issues...", documents.len());
+                    on_document(doc)?;
+                    count += 1;
+                    if count.is_multiple_of(50) {
+                        eprintln!("  Processed {} issues...", count);
                     }
                 }
                 Err(_) => skipped += 1,
@@ -177,17 +198,20 @@ impl JiraSource {
             eprintln!("  Skipped {} issues (empty content)", skipped);
         }
 
-        Ok(documents)
+        Ok(count)
     }
 
-    fn fetch_issues_batch(
+    fn fetch_issues_batch<F>(
         &self,
         jql: &str,
         options: &SyncOptions,
-    ) -> Result<Vec<Document>, SourceError> {
-        let limit = options.limit.unwrap_or(100);
+        mut on_document: F,
+        limit: u32,
+    ) -> Result<u64, SourceError>
+    where
+        F: FnMut(Document) -> Result<(), SourceError>,
+    {
         let limit_str = limit.to_string();
-
         let args = [
             "jira", "search", jql, "--format", "markdown", "--limit", &limit_str,
         ];
@@ -215,12 +239,15 @@ impl JiraSource {
         let response: SearchResponse = serde_json::from_slice(&output.stdout)
             .map_err(|e| SourceError::ParseError(format!("failed to parse response: {}", e)))?;
 
-        let mut documents = Vec::new();
-        let mut skipped = 0;
+        let mut count = 0u64;
+        let mut skipped = 0u64;
 
         for issue in response.items {
             match self.issue_to_document(issue, &options.tags) {
-                Ok(doc) => documents.push(doc),
+                Ok(doc) => {
+                    on_document(doc)?;
+                    count += 1;
+                }
                 Err(_) => skipped += 1,
             }
         }
@@ -229,7 +256,7 @@ impl JiraSource {
             eprintln!("  Skipped {} issues (empty content)", skipped);
         }
 
-        Ok(documents)
+        Ok(count)
     }
 
     fn fetch_issue(&self, key: &str, tags: &[Tag]) -> Result<Document, SourceError> {
@@ -257,7 +284,6 @@ impl JiraSource {
         let summary = issue.fields.summary.as_deref().unwrap_or("");
         let description = issue.fields.description.as_deref().unwrap_or("");
 
-        // Build content
         let content = if description.is_empty() {
             format!("# {}\n\n{}", key, summary)
         } else {
@@ -271,10 +297,7 @@ impl JiraSource {
             )));
         }
 
-        // Build path: Project > Parent (if exists) > Issue
         let path = build_issue_path(&issue);
-
-        // Build URL
         let url = format!("https://42dot.atlassian.net/browse/{}", key);
 
         let source = Source::external(SourceType::Jira, key.clone(), url);
@@ -289,7 +312,6 @@ impl JiraSource {
             size_bytes: content.len() as u64,
         };
 
-        // Build tags
         let mut all_tags = tags.to_vec();
         if let Ok(tag) = "source:jira".parse() {
             all_tags.push(tag);
@@ -327,7 +349,6 @@ impl Default for JiraSource {
 fn extract_issue_key(query: &str) -> Option<String> {
     let query = query.trim();
 
-    // URL: https://domain.atlassian.net/browse/PROJECT-123
     if query.contains("atlassian.net/browse/") {
         return query
             .split("/browse/")
@@ -337,7 +358,6 @@ fn extract_issue_key(query: &str) -> Option<String> {
             .map(String::from);
     }
 
-    // Direct issue key: PROJ-1234
     if is_valid_issue_key(query) {
         return Some(query.to_string());
     }
@@ -358,7 +378,6 @@ fn is_valid_issue_key(key: &str) -> bool {
 fn build_issue_path(issue: &JiraIssue) -> String {
     let mut parts = Vec::new();
 
-    // Project name
     if let Some(ref project) = issue.fields.project {
         if let Some(ref name) = project.name {
             parts.push(name.as_str());
@@ -367,7 +386,6 @@ fn build_issue_path(issue: &JiraIssue) -> String {
         }
     }
 
-    // Parent issue (Epic, etc.)
     if let Some(ref parent) = issue.fields.parent {
         if let Some(ref fields) = parent.fields {
             if let Some(ref summary) = fields.summary {
@@ -378,7 +396,6 @@ fn build_issue_path(issue: &JiraIssue) -> String {
         }
     }
 
-    // Current issue
     let summary = issue.fields.summary.as_deref().unwrap_or(&issue.key);
     parts.push(summary);
 
@@ -398,21 +415,18 @@ mod tests {
 
     #[test]
     fn test_extract_issue_key() {
-        // Direct key
         assert_eq!(
             extract_issue_key("PROJ-1234"),
             Some("PROJ-1234".to_string())
         );
         assert_eq!(extract_issue_key("PROJ-123"), Some("PROJ-123".to_string()));
 
-        // URL
         let url = "https://example.atlassian.net/browse/PROJ-1234";
         assert_eq!(extract_issue_key(url), Some("PROJ-1234".to_string()));
 
         let url2 = "https://example.atlassian.net/browse/PROJ-123?param=1";
         assert_eq!(extract_issue_key(url2), Some("PROJ-123".to_string()));
 
-        // JQL queries (should not match)
         assert_eq!(extract_issue_key("key=PROJ-123"), None);
         assert_eq!(extract_issue_key("ORDER BY updated"), None);
         assert_eq!(extract_issue_key("project=PROJ"), None);

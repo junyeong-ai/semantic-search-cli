@@ -67,12 +67,16 @@ fn handle_show(format: OutputFormat) -> Result<()> {
     }
 
     println!("[embedding]");
-    println!("url = \"{}\"", config.embedding.url);
-    println!("timeout_secs = {}", config.embedding.timeout_secs);
+    println!("model_id = \"{}\"", config.embedding.model_id);
+    if let Some(ref path) = config.embedding.model_path {
+        println!("model_path = \"{}\"", path.display());
+    }
+    println!("dimension = {}", config.embedding.dimension);
     println!("batch_size = {}", config.embedding.batch_size);
     println!();
 
     println!("[vector_store]");
+    println!("driver = \"{}\"", config.vector_store.driver);
     println!("url = \"{}\"", config.vector_store.url);
     println!("collection = \"{}\"", config.vector_store.collection);
     if config.vector_store.api_key.is_some() {
@@ -99,6 +103,12 @@ fn handle_show(format: OutputFormat) -> Result<()> {
     if let Some(score) = config.search.default_min_score {
         println!("default_min_score = {score}");
     }
+    println!();
+
+    println!("[daemon]");
+    println!("idle_timeout_secs = {}", config.daemon.idle_timeout_secs);
+    println!("auto_start = {}", config.daemon.auto_start);
+    println!("socket_path = \"{}\"", config.socket_path().display());
 
     Ok(())
 }

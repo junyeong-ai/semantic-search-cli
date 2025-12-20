@@ -1,29 +1,36 @@
-//! Status command implementation.
-
 use anyhow::Result;
 
 use crate::cli::output::{StatusInfo, get_formatter};
-use crate::models::{Config, OutputFormat};
-use crate::services::{EmbeddingClient, VectorStoreClient};
+use crate::client::DaemonClient;
+use crate::models::{Config, OutputFormat, VectorDriver};
+use crate::services::create_backend;
 
-/// Handle the status command.
 pub async fn handle_status(format: OutputFormat, _verbose: bool) -> Result<()> {
     let config = Config::load()?;
     let formatter = get_formatter(format);
 
-    // Check embedding server
-    let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let (embedding_connected, embedding_model) = match embedding_client.health_check().await {
-        Ok(health) => (true, health.model_id),
-        Err(_) => (false, None),
+    let client = DaemonClient::new(&config);
+    let daemon_running = client.is_running();
+
+    let (daemon_status, embedding_model, idle_secs, metrics) = if daemon_running {
+        match client.status().await {
+            Ok(status) => (
+                true,
+                Some(status.embedding_model),
+                Some(status.idle_secs),
+                status.metrics,
+            ),
+            Err(_) => (false, None, None, None),
+        }
+    } else {
+        (false, None, None, None)
     };
 
-    // Check Qdrant server
-    let (qdrant_connected, qdrant_points) =
-        if let Ok(client) = VectorStoreClient::new(&config.vector_store) {
-            let connected = client.health_check().await.unwrap_or(false);
+    let (vector_store_connected, vector_store_points) =
+        if let Ok(store) = create_backend(&config.vector_store).await {
+            let connected = store.health_check().await.unwrap_or(false);
             let points = if connected {
-                client
+                store
                     .get_collection_info()
                     .await
                     .ok()
@@ -38,29 +45,39 @@ pub async fn handle_status(format: OutputFormat, _verbose: bool) -> Result<()> {
         };
 
     let status = StatusInfo {
-        embedding_url: config.embedding.url.clone(),
-        embedding_connected,
+        daemon_running: daemon_status,
+        daemon_idle_secs: idle_secs,
         embedding_model,
-        qdrant_url: config.vector_store.url.clone(),
-        qdrant_connected,
-        qdrant_points,
+        vector_store_driver: config.vector_store.driver.to_string(),
+        vector_store_url: config.vector_store.url.clone(),
+        vector_store_connected,
+        vector_store_points,
         collection: config.vector_store.collection.clone(),
+        metrics,
     };
 
     print!("{}", formatter.format_status(&status));
 
-    // Exit with error if infrastructure is not running
-    if !embedding_connected || !qdrant_connected {
+    if !daemon_status || !vector_store_connected {
         eprintln!();
-        if !embedding_connected {
+        if !daemon_status {
             eprintln!(
-                "⚠ Embedding server is not running. Start it with: cd embedding-server && python server.py"
+                "Hint: ML daemon not running. It will start automatically on first search/index."
             );
+            eprintln!("      Or start manually with: ssearch serve");
         }
-        if !qdrant_connected {
-            eprintln!("⚠ Qdrant is not running. Start it with: docker-compose up -d qdrant");
+        if !vector_store_connected {
+            match config.vector_store.driver {
+                VectorDriver::Qdrant => {
+                    eprintln!(
+                        "Warning: Qdrant not running. Start with: docker-compose up -d qdrant"
+                    );
+                }
+                VectorDriver::PostgreSQL => {
+                    eprintln!("Warning: PostgreSQL not accessible. Check connection settings.");
+                }
+            }
         }
-        std::process::exit(1);
     }
 
     Ok(())

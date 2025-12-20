@@ -72,36 +72,57 @@ impl ConfluenceSource {
     }
 
     pub fn sync(&self, options: SyncOptions) -> Result<Vec<Document>, SourceError> {
+        let mut documents = Vec::new();
+        self.sync_streaming(options, |doc| {
+            documents.push(doc);
+            Ok(())
+        })?;
+        Ok(documents)
+    }
+
+    pub fn sync_streaming<F>(
+        &self,
+        options: SyncOptions,
+        mut on_document: F,
+    ) -> Result<u64, SourceError>
+    where
+        F: FnMut(Document) -> Result<(), SourceError>,
+    {
         if !self.check_available()? {
             return Err(SourceError::CliNotFound(
                 "atlassian-cli not found. Install with: cargo install atlassian-cli".to_string(),
             ));
         }
 
-        // --project (space key) → sync entire space
         if let Some(ref space) = options.project {
             let cql = format!("space=\"{}\" AND type=page", space);
-            return self.fetch_pages(&cql, &options);
+            return self.fetch_pages_streaming(&cql, &options, on_document);
         }
 
         let query = options.query.as_deref().unwrap_or("type=page");
 
-        // Direct page ID → fetch single page
         if let Some(page_id) = extract_page_id(query) {
-            return self
-                .fetch_page(&page_id, &options.tags)
-                .map(|doc| vec![doc]);
+            let doc = self.fetch_page(&page_id, &options.tags)?;
+            on_document(doc)?;
+            return Ok(1);
         }
 
-        // CQL query
-        self.fetch_pages(query, &options)
+        self.fetch_pages_streaming(query, &options, on_document)
     }
 
-    fn fetch_pages(&self, cql: &str, options: &SyncOptions) -> Result<Vec<Document>, SourceError> {
+    fn fetch_pages_streaming<F>(
+        &self,
+        cql: &str,
+        options: &SyncOptions,
+        mut on_document: F,
+    ) -> Result<u64, SourceError>
+    where
+        F: FnMut(Document) -> Result<(), SourceError>,
+    {
         let excluded_ids = self.get_excluded_ids(&options.exclude_ancestors)?;
 
-        if options.limit.is_some() {
-            return self.fetch_pages_batch(cql, options, &excluded_ids);
+        if let Some(limit) = options.limit {
+            return self.fetch_pages_batch(cql, options, on_document, &excluded_ids, limit);
         }
 
         let args = [
@@ -131,8 +152,8 @@ impl ConfluenceSource {
             .ok_or_else(|| SourceError::ExecutionError("failed to capture stdout".to_string()))?;
 
         let reader = BufReader::new(stdout);
-        let mut documents = Vec::new();
-        let mut skipped = 0;
+        let mut count = 0u64;
+        let mut skipped = 0u64;
 
         for line in reader.lines() {
             let line = match line {
@@ -152,9 +173,10 @@ impl ConfluenceSource {
 
             match self.page_to_document(page, &options.tags) {
                 Ok(doc) => {
-                    documents.push(doc);
-                    if documents.len() % 50 == 0 {
-                        eprintln!("  Processed {} pages...", documents.len());
+                    on_document(doc)?;
+                    count += 1;
+                    if count.is_multiple_of(50) {
+                        eprintln!("  Processed {} pages...", count);
                     }
                 }
                 Err(_) => skipped += 1,
@@ -182,18 +204,21 @@ impl ConfluenceSource {
             eprintln!("  Skipped {} pages (excluded or empty)", skipped);
         }
 
-        Ok(documents)
+        Ok(count)
     }
 
-    fn fetch_pages_batch(
+    fn fetch_pages_batch<F>(
         &self,
         cql: &str,
         options: &SyncOptions,
+        mut on_document: F,
         excluded_ids: &HashSet<String>,
-    ) -> Result<Vec<Document>, SourceError> {
-        let limit = options.limit.unwrap_or(100);
+        limit: u32,
+    ) -> Result<u64, SourceError>
+    where
+        F: FnMut(Document) -> Result<(), SourceError>,
+    {
         let limit_str = limit.to_string();
-
         let args = [
             "confluence",
             "search",
@@ -229,8 +254,8 @@ impl ConfluenceSource {
         let response: SearchResponse = serde_json::from_slice(&output.stdout)
             .map_err(|e| SourceError::ParseError(format!("failed to parse response: {}", e)))?;
 
-        let mut documents = Vec::new();
-        let mut skipped = 0;
+        let mut count = 0u64;
+        let mut skipped = 0u64;
 
         for page in response.items {
             if excluded_ids.contains(&page.id) {
@@ -239,7 +264,10 @@ impl ConfluenceSource {
             }
 
             match self.page_to_document(page, &options.tags) {
-                Ok(doc) => documents.push(doc),
+                Ok(doc) => {
+                    on_document(doc)?;
+                    count += 1;
+                }
                 Err(_) => skipped += 1,
             }
         }
@@ -248,7 +276,7 @@ impl ConfluenceSource {
             eprintln!("  Skipped {} pages (excluded or empty)", skipped);
         }
 
-        Ok(documents)
+        Ok(count)
     }
 
     fn fetch_page(&self, page_id: &str, tags: &[Tag]) -> Result<Document, SourceError> {

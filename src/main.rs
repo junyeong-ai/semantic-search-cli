@@ -1,12 +1,10 @@
-//! Semantic Search CLI entry point.
-
 use anyhow::Result;
 use clap::Parser;
 use tokio::signal;
 
 use ssearch::cli::commands::{
-    handle_config, handle_import, handle_index, handle_search, handle_source, handle_status,
-    handle_tags,
+    handle_config, handle_import, handle_index, handle_search, handle_serve, handle_source,
+    handle_status, handle_tags,
 };
 use ssearch::cli::{Cli, Commands};
 use ssearch::models::Config;
@@ -18,14 +16,12 @@ async fn main() -> Result<()> {
     let format = cli.format.unwrap_or(config.search.default_format);
     let verbose = cli.verbose;
 
-    // Run the command with graceful shutdown support
     tokio::select! {
         result = run_command(cli.command, format, verbose) => {
             result?;
         }
         _ = shutdown_signal() => {
             eprintln!("\nReceived shutdown signal, cleaning up...");
-            // Give a moment for cleanup
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
@@ -33,7 +29,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run the selected command.
 async fn run_command(
     command: Commands,
     format: ssearch::models::OutputFormat,
@@ -61,12 +56,14 @@ async fn run_command(
         Commands::Source(cmd) => {
             handle_source(cmd, format, verbose).await?;
         }
+        Commands::Serve(args) => {
+            handle_serve(args).await?;
+        }
     }
 
     Ok(())
 }
 
-/// Wait for shutdown signal (Ctrl+C).
 async fn shutdown_signal() {
     let ctrl_c = async {
         signal::ctrl_c()

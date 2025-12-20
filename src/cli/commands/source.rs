@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::cli::output::{CliInfo, IndexStats, SourceInfo, get_formatter};
 use crate::models::{Config, OutputFormat, SourceType, Tag, parse_tags};
-use crate::services::{EmbeddingClient, TextChunker, VectorStoreClient, process_batch};
+use crate::services::{EmbeddingClient, TextChunker, create_backend, process_batch};
 use crate::sources::{SyncOptions, get_data_source};
 
 #[derive(Debug, Subcommand)]
@@ -243,9 +243,9 @@ async fn handle_sync(
 
     println!("Fetched {} documents, indexing...", documents.len());
 
-    let embedding_client = EmbeddingClient::new(&config.embedding)?;
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
-    vector_client.create_collection().await?;
+    let embedding_client = EmbeddingClient::new(config);
+    let vector_store = create_backend(&config.vector_store).await?;
+    vector_store.create_collection().await?;
 
     let chunker = TextChunker::new(&config.indexing);
 
@@ -288,7 +288,7 @@ async fn handle_sync(
         if pending_texts.len() >= batch_size {
             process_batch(
                 &embedding_client,
-                &vector_client,
+                vector_store.as_ref(),
                 &mut pending_chunks,
                 &mut pending_texts,
             )
@@ -299,7 +299,7 @@ async fn handle_sync(
     if !pending_texts.is_empty() {
         process_batch(
             &embedding_client,
-            &vector_client,
+            vector_store.as_ref(),
             &mut pending_chunks,
             &mut pending_texts,
         )
@@ -348,8 +348,8 @@ async fn handle_delete(
         }
     }
 
-    let vector_client = VectorStoreClient::new(&config.vector_store)?;
-    vector_client.delete_by_source_type(source_type).await?;
+    let vector_store = create_backend(&config.vector_store).await?;
+    vector_store.delete_by_source_type(source_type).await?;
 
     println!(
         "{}",
