@@ -99,8 +99,12 @@ cp target/release/ssearch ~/.local/bin/
 
 ## Configuration
 
-### Config File
-`~/.config/semantic-search-cli/config.toml`:
+### Config Files (Priority Order)
+1. Environment variables (`SSEARCH_*`)
+2. Project config (`.ssearch/config.toml`)
+3. Global config (`~/.config/ssearch/config.toml`)
+
+Global config example:
 
 ```toml
 [embedding]

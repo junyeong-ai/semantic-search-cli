@@ -123,6 +123,8 @@ cargo fmt --check           # Format check
 
 ---
 
-## Config Path
+## Config Paths
 
-`~/.config/semantic-search-cli/config.toml` (XDG_CONFIG_HOME respected)
+- Global: `~/.config/ssearch/config.toml` (XDG_CONFIG_HOME respected)
+- Project: `.ssearch/config.toml` (overrides global)
+- Environment: `SSEARCH_*` variables (highest priority)

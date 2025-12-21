@@ -99,8 +99,12 @@ cp target/release/ssearch ~/.local/bin/
 
 ## 설정
 
-### 설정 파일
-`~/.config/semantic-search-cli/config.toml`:
+### 설정 파일 (우선순위 순서)
+1. 환경변수 (`SSEARCH_*`)
+2. 프로젝트 설정 (`.ssearch/config.toml`)
+3. 전역 설정 (`~/.config/ssearch/config.toml`)
+
+전역 설정 예시:
 
 ```toml
 [embedding]
