@@ -25,6 +25,9 @@ toml = "0.9"
 thiserror = "2.0"
 anyhow = "1.0"
 
+# Environment
+dotenvy = "0.15"
+
 # Vector database
 qdrant-client = "1.15"
 

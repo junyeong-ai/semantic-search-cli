@@ -5,9 +5,10 @@ mod source;
 mod tag;
 
 pub use config::{
-    Config, DEFAULT_COLLECTION, DEFAULT_EMBEDDING_DIMENSION, DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_IDLE_TIMEOUT_SECS, DEFAULT_METRICS_RETENTION_DAYS, DEFAULT_QDRANT_URL, DaemonConfig,
-    EmbeddingConfig, IndexingConfig, MetricsConfig, SearchConfig, VectorDriver, VectorStoreConfig,
+    Config, ConfigSource, ConfigSources, DEFAULT_COLLECTION, DEFAULT_EMBEDDING_DIMENSION,
+    DEFAULT_EMBEDDING_MODEL, DEFAULT_IDLE_TIMEOUT_SECS, DEFAULT_METRICS_RETENTION_DAYS,
+    DEFAULT_QDRANT_URL, DaemonConfig, EmbeddingConfig, IndexingConfig, MetricsConfig,
+    PartialConfig, ResolvedConfig, SearchConfig, VectorDriver, VectorStoreConfig,
 };
 pub use document::{Document, DocumentChunk, DocumentMetadata};
 pub use search::{OutputFormat, SearchQuery, SearchResult, SearchResults};
