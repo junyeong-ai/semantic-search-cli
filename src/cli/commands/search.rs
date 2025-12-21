@@ -38,7 +38,7 @@ pub async fn handle_search(args: SearchArgs, format: OutputFormat, verbose: bool
         anyhow::bail!("search query cannot be empty");
     }
 
-    let config = Config::load()?;
+    let config = Config::load()?.config;
     let formatter = get_formatter(format);
     let start_time = Instant::now();
 

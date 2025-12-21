@@ -24,7 +24,7 @@ pub enum ServeCommand {
 }
 
 pub async fn handle_serve(args: ServeArgs) -> Result<()> {
-    let config = Config::load()?;
+    let config = Config::load()?.config;
 
     if args.daemon {
         return run_daemon_mode(config).await;

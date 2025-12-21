@@ -47,7 +47,7 @@ pub struct ImportDocument {
 
 /// Handle the import command.
 pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool) -> Result<()> {
-    let config = Config::load()?;
+    let config = Config::load()?.config;
     let formatter = get_formatter(format);
     let start_time = Instant::now();
 

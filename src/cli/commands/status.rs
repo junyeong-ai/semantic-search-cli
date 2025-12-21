@@ -6,7 +6,7 @@ use crate::models::{Config, OutputFormat, VectorDriver};
 use crate::services::create_backend;
 
 pub async fn handle_status(format: OutputFormat, _verbose: bool) -> Result<()> {
-    let config = Config::load()?;
+    let config = Config::load()?.config;
     let formatter = get_formatter(format);
 
     let client = DaemonClient::new(&config);

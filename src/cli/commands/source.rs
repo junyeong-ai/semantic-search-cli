@@ -64,7 +64,7 @@ pub enum SourceCommand {
 
 pub async fn handle_source(cmd: SourceCommand, format: OutputFormat, verbose: bool) -> Result<()> {
     let formatter = get_formatter(format);
-    let config = Config::load()?;
+    let config = Config::load()?.config;
 
     match cmd {
         SourceCommand::List => handle_list(formatter.as_ref(), verbose),

@@ -12,8 +12,8 @@ use ssearch::models::Config;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config = Config::load().unwrap_or_default();
-    let format = cli.format.unwrap_or(config.search.default_format);
+    let resolved = Config::load().unwrap_or_default();
+    let format = cli.format.unwrap_or(resolved.config.search.default_format);
     let verbose = cli.verbose;
 
     tokio::select! {

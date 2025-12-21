@@ -83,7 +83,7 @@ async fn handle_add(
     format: OutputFormat,
     verbose: bool,
 ) -> Result<()> {
-    let config = Config::load()?;
+    let config = Config::load()?.config;
     let formatter = get_formatter(format);
     let start_time = Instant::now();
 
@@ -229,7 +229,7 @@ async fn handle_delete(
     format: OutputFormat,
     verbose: bool,
 ) -> Result<()> {
-    let config = Config::load()?;
+    let config = Config::load()?.config;
     let formatter = get_formatter(format);
 
     let path = path.canonicalize().context("invalid path")?;
@@ -299,7 +299,7 @@ async fn handle_delete(
 }
 
 async fn handle_clear(force: bool, format: OutputFormat, verbose: bool) -> Result<()> {
-    let config = Config::load()?;
+    let config = Config::load()?.config;
     let formatter = get_formatter(format);
 
     if verbose {

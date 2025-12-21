@@ -32,7 +32,7 @@ pub enum TagsCommand {
 /// Handle the tags command.
 pub async fn handle_tags(cmd: TagsCommand, format: OutputFormat, verbose: bool) -> Result<()> {
     let formatter = get_formatter(format);
-    let config = Config::load()?;
+    let config = Config::load()?.config;
 
     match cmd {
         TagsCommand::List => handle_list(formatter.as_ref(), &config, verbose).await,
