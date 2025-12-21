@@ -5,8 +5,7 @@ BINARY_NAME="ssearch"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 SKILL_NAME="semantic-search"
 USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
-# Use XDG Base Directory or ~/.config for all platforms
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/semantic-search-cli"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ssearch"
 CACHE_DIR="$HOME/.cache/semantic-search-cli"
 MODELS_DIR="$CACHE_DIR/models"
 METRICS_DB="$CACHE_DIR/metrics.db"
@@ -109,28 +108,32 @@ cleanup_skill
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔧 Configuration Cleanup"
+echo "🔧 Global Configuration Cleanup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
 if [ -d "$CONFIG_DIR" ]; then
-    echo "Configuration found at: $CONFIG_DIR"
+    echo "Global config found at: $CONFIG_DIR"
     echo ""
-    read -p "Remove configuration? [y/N]: " choice
+    read -p "Remove global configuration? [y/N]: " choice
     echo
 
     case "$choice" in
         y|Y)
             rm -rf "$CONFIG_DIR"
-            echo "✅ Removed configuration: $CONFIG_DIR"
+            echo "✅ Removed global config: $CONFIG_DIR"
             ;;
         *)
-            echo "⏭️  Kept configuration"
+            echo "⏭️  Kept global config"
             ;;
     esac
 else
-    echo "⚠️  Configuration not found at: $CONFIG_DIR"
+    echo "⚠️  Global config not found at: $CONFIG_DIR"
 fi
+
+echo ""
+echo "Note: Project-level configs (.ssearch/config.toml) are NOT removed."
+echo "They are part of project repositories."
 
 # ============================================================================
 # Models & Metrics Cleanup
@@ -184,7 +187,8 @@ echo "✅ Uninstallation Complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Remaining items (not automatically removed):"
-echo "  • Project-level skill: ./.claude/skills/$SKILL_NAME"
+echo "  • Project-level configs: .ssearch/config.toml"
+echo "  • Project-level skill: .claude/skills/$SKILL_NAME"
 echo "  • Qdrant data in Docker volumes (docker-compose down -v to remove)"
 echo ""
 echo "To reinstall: ./scripts/install.sh"

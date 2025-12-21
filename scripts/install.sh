@@ -7,8 +7,7 @@ REPO="junyeong-ai/semantic-search-cli"
 SKILL_NAME="semantic-search"
 PROJECT_SKILL_DIR=".claude/skills/$SKILL_NAME"
 USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
-# Use XDG Base Directory or ~/.config for all platforms
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/semantic-search-cli"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ssearch"
 CACHE_DIR="$HOME/.cache/semantic-search-cli"
 MODELS_DIR="$CACHE_DIR/models"
 EMBEDDING_MODEL="JunyeongAI/qwen3-embedding-0.6b-onnx"
@@ -252,16 +251,22 @@ check_dependencies() {
 }
 
 setup_config() {
-    if [ ! -d "$CONFIG_DIR" ]; then
-        echo "📝 Creating default configuration..." >&2
-        mkdir -p "$CONFIG_DIR"
+    if [ -f "$CONFIG_DIR/config.toml" ]; then
+        echo "ℹ️  Global config already exists at $CONFIG_DIR/config.toml" >&2
+        return 0
+    fi
 
-        if command -v "$BINARY_NAME" >/dev/null 2>&1 || [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
-            "$INSTALL_DIR/$BINARY_NAME" config init 2>/dev/null || true
-            echo "   ✅ Configuration created at $CONFIG_DIR" >&2
-        fi
+    echo "📝 Creating global configuration..." >&2
+
+    if [ ! -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        echo "   ⚠️  Binary not found, skipping config creation" >&2
+        return 0
+    fi
+
+    if "$INSTALL_DIR/$BINARY_NAME" config init --global >&2; then
+        echo "   ✅ Global config created" >&2
     else
-        echo "ℹ️  Configuration already exists at $CONFIG_DIR" >&2
+        echo "   ⚠️  Failed to create global config (run 'ssearch config init --global' manually)" >&2
     fi
 }
 
