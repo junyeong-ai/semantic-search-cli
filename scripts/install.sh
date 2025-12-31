@@ -3,6 +3,7 @@ set -e
 
 BINARY_NAME="ssearch"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+LIB_DIR="${LIB_DIR:-$HOME/.local/lib/ssearch}"
 REPO="junyeong-ai/semantic-search-cli"
 SKILL_NAME="semantic-search"
 PROJECT_SKILL_DIR=".claude/skills/$SKILL_NAME"
@@ -65,10 +66,12 @@ download_binary() {
     fi
 
     echo "📦 Extracting..." >&2
-    tar -xzf "$archive" 2>&2
+    mkdir -p extracted
+    tar -xzf "$archive" -C extracted 2>&2
     rm -f "$archive" "${archive}.sha256"
 
-    echo "$BINARY_NAME"
+    # Return the extracted directory path
+    echo "extracted"
 }
 
 build_from_source() {
@@ -81,10 +84,27 @@ build_from_source() {
 }
 
 install_binary() {
-    local binary_path="$1"
+    local source_path="$1"
+    local is_extracted_dir="$2"
 
     mkdir -p "$INSTALL_DIR"
-    cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
+    mkdir -p "$LIB_DIR"
+
+    if [ "$is_extracted_dir" = "true" ]; then
+        # Install from extracted release archive (includes lib/)
+        cp "$source_path/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
+
+        # Install ONNX Runtime libraries
+        if [ -d "$source_path/lib" ]; then
+            cp -r "$source_path/lib/"* "$LIB_DIR/"
+            echo "✅ ONNX Runtime libraries installed to $LIB_DIR" >&2
+        fi
+        rm -rf "$source_path"
+    else
+        # Install from source build
+        cp "$source_path" "$INSTALL_DIR/$BINARY_NAME"
+    fi
+
     chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -362,6 +382,7 @@ main() {
                     exit 1
                 fi
                 binary_path=$(build_from_source)
+                is_extracted="false"
                 ;;
             1|"")
                 binary_path=$(download_binary "$version" "$target") || {
@@ -371,7 +392,9 @@ main() {
                         exit 1
                     fi
                     binary_path=$(build_from_source)
+                    is_extracted="false"
                 }
+                is_extracted="true"
                 ;;
             *)
                 echo "❌ Invalid choice" >&2
@@ -386,18 +409,36 @@ main() {
             exit 1
         fi
         binary_path=$(build_from_source)
+        is_extracted="false"
     fi
 
-    install_binary "$binary_path"
+    install_binary "$binary_path" "$is_extracted"
 
     echo "" >&2
-    if echo "$PATH" | grep -q "$INSTALL_DIR"; then
-        echo "✅ $INSTALL_DIR is in PATH" >&2
+
+    # Check PATH
+    local path_ok=true
+    if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+        path_ok=false
+    fi
+
+    # Check if we need to set ORT_DYLIB_PATH (for prebuilt binary with bundled libs)
+    local needs_env=false
+    if [ "$is_extracted" = "true" ] && [ -d "$LIB_DIR" ]; then
+        needs_env=true
+    fi
+
+    if [ "$path_ok" = "true" ] && [ "$needs_env" = "false" ]; then
+        echo "✅ Environment configured correctly" >&2
     else
-        echo "⚠️  $INSTALL_DIR not in PATH" >&2
+        echo "⚠️  Add to shell profile (~/.bashrc, ~/.zshrc):" >&2
         echo "" >&2
-        echo "Add to shell profile (~/.bashrc, ~/.zshrc):" >&2
-        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
+        if [ "$path_ok" = "false" ]; then
+            echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
+        fi
+        if [ "$needs_env" = "true" ]; then
+            echo "  export ORT_DYLIB_PATH=\"$LIB_DIR\"" >&2
+        fi
     fi
     echo "" >&2
 

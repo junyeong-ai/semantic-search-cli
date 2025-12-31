@@ -38,8 +38,8 @@ pgvector = { version = "0.4", features = ["sqlx"] }
 # Async trait
 async-trait = "0.1"
 
-# ONNX Runtime
-ort = "2.0.0-rc.10"
+# ONNX Runtime (load-dynamic: runtime loading without link dependency)
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
 
 # Tokenizers
 tokenizers = "0.22"

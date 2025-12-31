@@ -51,6 +51,29 @@ jobs:
             cargo build --release --target ${{ matrix.target }}
           fi
 
+      - name: Download ONNX Runtime
+        shell: bash
+        run: |
+          ORT_VERSION="1.20.0"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu)
+              curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" | tar xz
+              mv onnxruntime-linux-x64-${ORT_VERSION} onnxruntime
+              ;;
+            aarch64-unknown-linux-gnu)
+              curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz" | tar xz
+              mv onnxruntime-linux-aarch64-${ORT_VERSION} onnxruntime
+              ;;
+            x86_64-apple-darwin)
+              curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-x86_64-${ORT_VERSION}.tgz" | tar xz
+              mv onnxruntime-osx-x86_64-${ORT_VERSION} onnxruntime
+              ;;
+            aarch64-apple-darwin)
+              curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-arm64-${ORT_VERSION}.tgz" | tar xz
+              mv onnxruntime-osx-arm64-${ORT_VERSION} onnxruntime
+              ;;
+          esac
+
       - name: Package binary
         shell: bash
         run: |
@@ -58,8 +81,20 @@ jobs:
           target="${{ matrix.target }}"
           binary="target/$target/release/ssearch"
           archive="ssearch-v${version}-${target}.tar.gz"
-          cp "$binary" ssearch
-          tar -czf "$archive" ssearch
+
+          # Create package directory
+          mkdir -p package/lib
+          cp "$binary" package/ssearch
+
+          # Copy ONNX Runtime libraries
+          if [[ "$target" == *"linux"* ]]; then
+            cp onnxruntime/lib/libonnxruntime.so* package/lib/
+          else
+            cp onnxruntime/lib/libonnxruntime*.dylib package/lib/
+          fi
+
+          # Create archive with binary and libraries
+          tar -czf "$archive" -C package .
           echo "ASSET=$archive" >> $GITHUB_ENV
 
       - name: Generate checksum
