@@ -153,6 +153,11 @@ fn print_resolved_config(resolved: &ResolvedConfig, show_source: bool) {
         config.embedding.batch_size,
         src(&sources.embedding_batch_size)
     );
+    println!(
+        "max_tokens = {}{}",
+        config.embedding.max_tokens,
+        src(&sources.embedding_max_tokens)
+    );
     println!();
 
     println!("[vector_store]");

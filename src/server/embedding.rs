@@ -5,6 +5,7 @@ use ndarray::Array2;
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
+use tokenizers::{PaddingParams, PaddingStrategy, TruncationParams, TruncationStrategy};
 
 use crate::error::ModelError;
 use crate::models::EmbeddingConfig;
@@ -22,6 +23,7 @@ impl EmbeddingModel {
     pub fn load(config: &EmbeddingConfig, model_dir: &Path) -> Result<Self, ModelError> {
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
+        let max_tokens = config.max_tokens as usize;
 
         if !model_path.exists() {
             return Err(ModelError::NotFound(format!(
@@ -39,8 +41,23 @@ impl EmbeddingModel {
             .commit_from_file(&model_path)
             .map_err(|e: ort::Error| ModelError::LoadError(e.to_string()))?;
 
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| ModelError::TokenizerError(e.to_string()))?;
+
+        // Configure truncation to prevent OOM with long texts
+        tokenizer
+            .with_truncation(Some(TruncationParams {
+                max_length: max_tokens,
+                strategy: TruncationStrategy::LongestFirst,
+                ..Default::default()
+            }))
+            .map_err(|e| ModelError::TokenizerError(e.to_string()))?;
+
+        // Configure padding for efficient batch processing
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            ..Default::default()
+        }));
 
         Ok(Self {
             session: Mutex::new(session),

@@ -9,6 +9,7 @@ pub const DEFAULT_QDRANT_URL: &str = "http://localhost:16334";
 pub const DEFAULT_COLLECTION: &str = "semantic_search";
 pub const DEFAULT_EMBEDDING_MODEL: &str = "JunyeongAI/qwen3-embedding-0.6b-onnx";
 pub const DEFAULT_EMBEDDING_DIMENSION: u32 = 1024;
+pub const DEFAULT_MAX_TOKENS: u32 = 2048;
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 600;
 pub const DEFAULT_METRICS_RETENTION_DAYS: u32 = 30;
 
@@ -67,6 +68,7 @@ pub struct ConfigSources {
     pub embedding_model_id: ConfigSource,
     pub embedding_dimension: ConfigSource,
     pub embedding_batch_size: ConfigSource,
+    pub embedding_max_tokens: ConfigSource,
     pub vector_store_driver: ConfigSource,
     pub vector_store_url: ConfigSource,
     pub vector_store_collection: ConfigSource,
@@ -202,6 +204,10 @@ impl Config {
                 config.embedding.batch_size = v;
                 sources.embedding_batch_size = source;
             }
+            if let Some(v) = emb.max_tokens {
+                config.embedding.max_tokens = v;
+                sources.embedding_max_tokens = source;
+            }
             if emb.model_path.is_some() {
                 config.embedding.model_path = emb.model_path.clone();
             }
@@ -310,6 +316,12 @@ impl Config {
         {
             config.embedding.batch_size = size;
             sources.embedding_batch_size = ConfigSource::Env;
+        }
+        if let Ok(v) = std::env::var("SSEARCH_MAX_TOKENS")
+            && let Ok(tokens) = v.parse()
+        {
+            config.embedding.max_tokens = tokens;
+            sources.embedding_max_tokens = ConfigSource::Env;
         }
         if let Ok(v) = std::env::var("SSEARCH_VECTOR_DRIVER")
             && let Ok(driver) = v.parse()
@@ -479,6 +491,7 @@ pub struct PartialEmbeddingConfig {
     pub model_path: Option<PathBuf>,
     pub dimension: Option<u32>,
     pub batch_size: Option<u32>,
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -533,6 +546,10 @@ pub struct EmbeddingConfig {
 
     #[serde(default = "default_batch_size")]
     pub batch_size: u32,
+
+    /// Maximum tokens per text for embedding (truncation limit)
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
 }
 
 fn default_embedding_model() -> String {
@@ -547,6 +564,10 @@ fn default_batch_size() -> u32 {
     8
 }
 
+fn default_max_tokens() -> u32 {
+    DEFAULT_MAX_TOKENS
+}
+
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
@@ -554,6 +575,7 @@ impl Default for EmbeddingConfig {
             model_path: None,
             dimension: default_embedding_dimension(),
             batch_size: default_batch_size(),
+            max_tokens: default_max_tokens(),
         }
     }
 }

@@ -2,36 +2,29 @@ use crate::client::DaemonClient;
 use crate::error::EmbeddingError;
 use crate::models::Config;
 
+/// Client for generating embeddings via the daemon service.
+/// Batch management is handled by callers (source.rs, index.rs).
 pub struct EmbeddingClient {
     client: DaemonClient,
-    batch_size: usize,
 }
 
 impl EmbeddingClient {
     pub fn new(config: &Config) -> Self {
         Self {
             client: DaemonClient::new(config),
-            batch_size: config.embedding.batch_size as usize,
         }
     }
 
+    /// Embed a batch of texts. Callers should manage batch sizes.
     pub async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut all_embeddings = Vec::with_capacity(texts.len());
-
-        for chunk in texts.chunks(self.batch_size) {
-            let embeddings = self
-                .client
-                .embed(chunk.to_vec(), false)
-                .await
-                .map_err(EmbeddingError::DaemonError)?;
-            all_embeddings.extend(embeddings);
-        }
-
-        Ok(all_embeddings)
+        self.client
+            .embed(texts, false)
+            .await
+            .map_err(EmbeddingError::DaemonError)
     }
 
     pub async fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
