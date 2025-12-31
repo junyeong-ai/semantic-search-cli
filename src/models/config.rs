@@ -329,7 +329,10 @@ impl Config {
             config.vector_store.driver = driver;
             sources.vector_store_driver = ConfigSource::Env;
         }
-        if let Ok(v) = std::env::var("SSEARCH_QDRANT_URL") {
+        // SSEARCH_VECTOR_URL preferred, SSEARCH_QDRANT_URL for backward compatibility
+        if let Ok(v) = std::env::var("SSEARCH_VECTOR_URL")
+            .or_else(|_| std::env::var("SSEARCH_QDRANT_URL"))
+        {
             config.vector_store.url = v;
             sources.vector_store_url = ConfigSource::Env;
         }
