@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Result;
 use clap::Parser;
 use tokio::signal;
@@ -9,8 +11,54 @@ use ssearch::cli::commands::{
 use ssearch::cli::{Cli, Commands};
 use ssearch::models::Config;
 
+/// Detect ONNX Runtime library path and set ORT_DYLIB_PATH if not already set.
+/// Must be called before any ort code runs.
+fn detect_and_set_ort_path() {
+    // Skip if user has already set a valid ORT_DYLIB_PATH
+    if std::env::var("ORT_DYLIB_PATH")
+        .map(|p| Path::new(&p).exists())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    // Find first existing path
+    let found = if cfg!(target_os = "macos") {
+        [
+            format!("{home}/.local/lib/ssearch/libonnxruntime.dylib"),
+            "/opt/homebrew/opt/onnxruntime/lib/libonnxruntime.dylib".into(),
+            "/usr/local/opt/onnxruntime/lib/libonnxruntime.dylib".into(),
+        ]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+    } else if cfg!(target_os = "linux") {
+        [
+            format!("{home}/.local/lib/ssearch/libonnxruntime.so"),
+            "/usr/lib/libonnxruntime.so".into(),
+            "/usr/local/lib/libonnxruntime.so".into(),
+            "/usr/lib/x86_64-linux-gnu/libonnxruntime.so".into(),
+            "/usr/lib/aarch64-linux-gnu/libonnxruntime.so".into(),
+        ]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+    } else {
+        None
+    };
+
+    if let Some(path) = found {
+        // SAFETY: Called at program start before any threads are spawned.
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", path);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    detect_and_set_ort_path();
+
     let cli = Cli::parse();
     let resolved = Config::load().unwrap_or_default();
     let format = cli.format.unwrap_or(resolved.config.search.default_format);

@@ -74,8 +74,51 @@ download_binary() {
     echo "extracted"
 }
 
+check_onnxruntime() {
+    # Check for ONNX Runtime library (must match paths in src/main.rs)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        local ort_paths=(
+            "$HOME/.local/lib/ssearch/libonnxruntime.dylib"
+            "/opt/homebrew/opt/onnxruntime/lib/libonnxruntime.dylib"
+            "/usr/local/opt/onnxruntime/lib/libonnxruntime.dylib"
+        )
+    else
+        local ort_paths=(
+            "$HOME/.local/lib/ssearch/libonnxruntime.so"
+            "/usr/lib/libonnxruntime.so"
+            "/usr/local/lib/libonnxruntime.so"
+            "/usr/lib/x86_64-linux-gnu/libonnxruntime.so"
+            "/usr/lib/aarch64-linux-gnu/libonnxruntime.so"
+        )
+    fi
+    for path in "${ort_paths[@]}"; do
+        [ -f "$path" ] && return 0
+    done
+    return 1
+}
+
 build_from_source() {
     echo "🔨 Building from source..." >&2
+
+    # Check ONNX Runtime for source build
+    if ! check_onnxruntime; then
+        echo "" >&2
+        echo "⚠️  ONNX Runtime not found. Required for source build." >&2
+        echo "" >&2
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            echo "   Install via Homebrew:" >&2
+            echo "     brew install onnxruntime" >&2
+        else
+            echo "   Install on Ubuntu/Debian:" >&2
+            echo "     # Download from https://github.com/microsoft/onnxruntime/releases" >&2
+            echo "     sudo cp libonnxruntime.so /usr/local/lib/" >&2
+            echo "     sudo ldconfig" >&2
+        fi
+        echo "" >&2
+        read -p "Continue anyway? [y/N]: " choice
+        [[ ! "$choice" =~ ^[yY]$ ]] && exit 1
+    fi
+
     if ! cargo build --release 2>&1 | grep -E "Compiling|Finished|error" >&2; then
         echo "❌ Build failed" >&2
         exit 1
@@ -266,6 +309,13 @@ check_dependencies() {
         echo "  ⚠️  Docker: Not installed (required for Qdrant)" >&2
     fi
 
+    # Check ONNX Runtime (for source build or if not using bundled version)
+    if check_onnxruntime; then
+        echo "  ✅ ONNX Runtime: Found" >&2
+    else
+        echo "  ⚠️  ONNX Runtime: Not found (bundled with prebuilt binary)" >&2
+    fi
+
     echo "" >&2
     return $missing
 }
@@ -422,13 +472,13 @@ main() {
         path_ok=false
     fi
 
-    # Check if we need to set ORT_DYLIB_PATH (for prebuilt binary with bundled libs)
-    local needs_env=false
-    if [ "$is_extracted" = "true" ] && [ -d "$LIB_DIR" ]; then
-        needs_env=true
+    # Check if ONNX Runtime is auto-detectable (bundled or system-installed)
+    local ort_ok=false
+    if check_onnxruntime; then
+        ort_ok=true
     fi
 
-    if [ "$path_ok" = "true" ] && [ "$needs_env" = "false" ]; then
+    if [ "$path_ok" = "true" ] && [ "$ort_ok" = "true" ]; then
         echo "✅ Environment configured correctly" >&2
     else
         echo "⚠️  Add to shell profile (~/.bashrc, ~/.zshrc):" >&2
@@ -436,8 +486,17 @@ main() {
         if [ "$path_ok" = "false" ]; then
             echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
         fi
-        if [ "$needs_env" = "true" ]; then
-            echo "  export ORT_DYLIB_PATH=\"$LIB_DIR\"" >&2
+        # Only show ORT_DYLIB_PATH if not auto-detectable
+        if [ "$ort_ok" = "false" ]; then
+            echo "" >&2
+            echo "  # ONNX Runtime not found. Install or set path manually:" >&2
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                echo "  # Option 1: brew install onnxruntime" >&2
+                echo "  # Option 2: export ORT_DYLIB_PATH=\"/path/to/libonnxruntime.dylib\"" >&2
+            else
+                echo "  # Option 1: Install from package manager or GitHub releases" >&2
+                echo "  # Option 2: export ORT_DYLIB_PATH=\"/path/to/libonnxruntime.so\"" >&2
+            fi
         fi
     fi
     echo "" >&2
