@@ -274,10 +274,12 @@ impl Formatter for JsonFormatter {
     }
 
     fn format_tags(&self, tags: &[(String, u64)]) -> String {
-        let json: Vec<serde_json::Value> = tags
+        let tags_array: Vec<serde_json::Value> = tags
             .iter()
             .map(|(tag, count)| serde_json::json!({"tag": tag, "count": count}))
             .collect();
+
+        let json = serde_json::json!({"tags": tags_array});
 
         if self.pretty {
             serde_json::to_string_pretty(&json).unwrap()
@@ -287,7 +289,7 @@ impl Formatter for JsonFormatter {
     }
 
     fn format_sources(&self, sources: &[SourceInfo]) -> String {
-        let json: Vec<serde_json::Value> = sources
+        let sources_array: Vec<serde_json::Value> = sources
             .iter()
             .map(|s| {
                 serde_json::json!({
@@ -298,6 +300,8 @@ impl Formatter for JsonFormatter {
             })
             .collect();
 
+        let json = serde_json::json!({"sources": sources_array});
+
         if self.pretty {
             serde_json::to_string_pretty(&json).unwrap()
         } else {
@@ -306,7 +310,7 @@ impl Formatter for JsonFormatter {
     }
 
     fn format_cli_status(&self, clis: &[CliInfo]) -> String {
-        let json: Vec<serde_json::Value> = clis
+        let clis_array: Vec<serde_json::Value> = clis
             .iter()
             .map(|c| {
                 serde_json::json!({
@@ -317,6 +321,8 @@ impl Formatter for JsonFormatter {
                 })
             })
             .collect();
+
+        let json = serde_json::json!({"clis": clis_array});
 
         if self.pretty {
             serde_json::to_string_pretty(&json).unwrap()
