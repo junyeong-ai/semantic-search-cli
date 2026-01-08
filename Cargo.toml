@@ -39,13 +39,10 @@ pgvector = { version = "0.4", features = ["sqlx"] }
 async-trait = "0.1"
 
 # ONNX Runtime (load-dynamic: runtime loading without link dependency)
-ort = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["load-dynamic", "ndarray"] }
 
 # Tokenizers
 tokenizers = "0.22"
-
-# Numeric computing
-ndarray = "0.16"
 
 # SQLite for metrics
 rusqlite = { version = "0.32", features = ["bundled"] }

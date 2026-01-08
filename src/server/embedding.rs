@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ndarray::Array2;
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
@@ -106,18 +105,11 @@ impl EmbeddingModel {
             }
         }
 
-        let input_ids_array = Array2::from_shape_vec((batch_size, max_len), input_ids)
-            .map_err(|e| ModelError::InferenceError(e.to_string()))?;
-        let attention_mask_array = Array2::from_shape_vec((batch_size, max_len), attention_mask)
-            .map_err(|e| ModelError::InferenceError(e.to_string()))?;
-        let position_ids_array = Array2::from_shape_vec((batch_size, max_len), position_ids)
-            .map_err(|e| ModelError::InferenceError(e.to_string()))?;
-
-        let input_ids_tensor = Tensor::from_array(input_ids_array)
+        let input_ids_tensor = Tensor::from_array(([batch_size, max_len], input_ids))
             .map_err(|e: ort::Error| ModelError::InferenceError(e.to_string()))?;
-        let attention_mask_tensor = Tensor::from_array(attention_mask_array)
+        let attention_mask_tensor = Tensor::from_array(([batch_size, max_len], attention_mask))
             .map_err(|e: ort::Error| ModelError::InferenceError(e.to_string()))?;
-        let position_ids_tensor = Tensor::from_array(position_ids_array)
+        let position_ids_tensor = Tensor::from_array(([batch_size, max_len], position_ids))
             .map_err(|e: ort::Error| ModelError::InferenceError(e.to_string()))?;
 
         let mut session = self
