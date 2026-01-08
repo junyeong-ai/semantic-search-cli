@@ -253,7 +253,7 @@ impl FigmaSource {
 
             if content.len() >= 30 {
                 let url = format!("https://www.figma.com/design/{}", file_key);
-                let source = Source::external(SourceType::Figma, file_key.clone(), url);
+                let source = Source::with_url(SourceType::Figma, file_key.clone(), url);
                 let checksum = calculate_checksum(&content);
                 let metadata = DocumentMetadata {
                     filename: Some(format!("{}.md", sanitize_filename(&file_name))),
@@ -359,7 +359,7 @@ impl FigmaSource {
             "https://www.figma.com/design/{}?node-id={}",
             file_key, figma_node_id
         );
-        let source = Source::external(SourceType::Figma, figma_node_id.clone(), url);
+        let source = Source::with_url(SourceType::Figma, figma_node_id.clone(), url);
         let checksum = calculate_checksum(&content);
 
         let title = format!("{} - {}", page_name, node.name);

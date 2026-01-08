@@ -13,7 +13,6 @@ use crate::models::{
 };
 use crate::services::{EmbeddingClient, TextChunker, create_backend, process_batch};
 
-/// Arguments for the import command.
 #[derive(Debug, Args)]
 pub struct ImportArgs {
     /// Path to JSON or JSONL file (use - for stdin)
@@ -33,11 +32,11 @@ pub struct ImportArgs {
     pub validate_only: bool,
 }
 
-/// JSON import document format.
 #[derive(Debug, Deserialize)]
 pub struct ImportDocument {
     pub content: String,
-    pub url: String,
+    #[serde(default)]
+    pub url: Option<String>,
     pub title: Option<String>,
     pub path: Option<String>,
     #[serde(default)]
@@ -45,23 +44,18 @@ pub struct ImportDocument {
     pub source_type: Option<String>,
 }
 
-/// Handle the import command.
 pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool) -> Result<()> {
     let config = Config::load()?.config;
     let formatter = get_formatter(format);
     let start_time = Instant::now();
 
-    // Parse tags
     let tags: Vec<Tag> = if let Some(ref tag_str) = args.tags {
         parse_tags(tag_str).context("failed to parse tags")?
     } else {
         Vec::new()
     };
 
-    // Read input
     let input = read_input(args.file.as_deref())?;
-
-    // Parse documents
     let import_docs = parse_import_documents(&input)?;
 
     if import_docs.is_empty() {
@@ -87,14 +81,10 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
         return Ok(());
     }
 
-    // Initialize clients
     let embedding_client = EmbeddingClient::new(&config);
     let vector_store = create_backend(&config.vector_store).await?;
-
-    // Ensure collection exists
     vector_store.create_collection().await?;
 
-    // Create chunker
     let chunker = TextChunker::new(&config.indexing);
 
     let mut stats = IndexStats {
@@ -102,32 +92,38 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
         ..Default::default()
     };
 
-    // Process documents
     let batch_size = config.embedding.batch_size as usize;
     let mut pending_chunks = Vec::new();
     let mut pending_texts = Vec::new();
 
     for import_doc in import_docs {
-        // Validate required fields
         if import_doc.content.is_empty() {
             stats.files_skipped += 1;
             continue;
         }
-        if import_doc.url.is_empty() {
-            stats.files_skipped += 1;
-            continue;
-        }
 
-        // Create document
-        let source = import_doc
+        let checksum = {
+            use sha2::{Digest, Sha256};
+            let hash = Sha256::digest(import_doc.content.as_bytes());
+            hex::encode(hash)
+        };
+
+        // Parse source_type - never fails, defaults to Other("custom")
+        let source_type: SourceType = import_doc
             .source_type
             .as_deref()
-            .and_then(|st| st.parse::<SourceType>().ok())
-            .filter(SourceType::is_external)
-            .map_or_else(
-                || Source::custom(&import_doc.url),
-                |source_type| Source::external(source_type, &import_doc.url, &import_doc.url),
-            );
+            .map(|s| s.parse().unwrap())
+            .unwrap_or_else(|| SourceType::Other("custom".to_string()));
+
+        // Location: url > path > checksum
+        let location = import_doc
+            .url
+            .clone()
+            .or_else(|| import_doc.path.clone())
+            .unwrap_or_else(|| checksum.clone());
+
+        let source = Source::new(source_type, location, import_doc.url.clone());
+
         let metadata = DocumentMetadata {
             filename: None,
             extension: None,
@@ -137,26 +133,17 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
             size_bytes: import_doc.content.len() as u64,
         };
 
-        let checksum = {
-            use sha2::{Digest, Sha256};
-            let hash = Sha256::digest(import_doc.content.as_bytes());
-            hex::encode(hash)
-        };
-
-        // Merge CLI tags with JSON file tags
         let mut doc_tags = tags.clone();
         for tag_str in &import_doc.tags {
-            if let Ok(tag) = tag_str.parse::<Tag>() {
-                // Avoid duplicates
-                if !doc_tags.iter().any(|t| t.to_string() == tag.to_string()) {
-                    doc_tags.push(tag);
-                }
+            if let Ok(tag) = tag_str.parse::<Tag>()
+                && !doc_tags.iter().any(|t| t.to_string() == tag.to_string())
+            {
+                doc_tags.push(tag);
             }
         }
 
         let document = Document::new(import_doc.content, source, doc_tags, checksum, metadata);
 
-        // Chunk document
         let chunks = chunker.chunk(&document);
         stats.chunks_created += chunks.len() as u64;
         stats.files_indexed += 1;
@@ -166,7 +153,6 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
             pending_chunks.push(chunk);
         }
 
-        // Process batch if full
         if pending_texts.len() >= batch_size {
             process_batch(
                 &embedding_client,
@@ -178,7 +164,6 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
         }
     }
 
-    // Process remaining chunks
     if !pending_texts.is_empty() {
         process_batch(
             &embedding_client,
@@ -190,13 +175,11 @@ pub async fn handle_import(args: ImportArgs, format: OutputFormat, verbose: bool
     }
 
     stats.duration_ms = start_time.elapsed().as_millis() as u64;
-
     print!("{}", formatter.format_index_stats(&stats));
 
     Ok(())
 }
 
-/// Read input from file or stdin.
 fn read_input(file: Option<&Path>) -> Result<String> {
     match file {
         Some(path) if path.to_string_lossy() != "-" => {
@@ -212,7 +195,6 @@ fn read_input(file: Option<&Path>) -> Result<String> {
     }
 }
 
-/// Parse import documents from JSON or JSONL.
 fn parse_import_documents(input: &str) -> Result<Vec<ImportDocument>> {
     let input = input.trim();
 
@@ -220,12 +202,10 @@ fn parse_import_documents(input: &str) -> Result<Vec<ImportDocument>> {
         return Ok(Vec::new());
     }
 
-    // Try parsing as JSON array first
     if input.starts_with('[') {
         return serde_json::from_str(input).context("failed to parse JSON array");
     }
 
-    // Try parsing as JSONL (one JSON object per line)
     let mut documents = Vec::new();
     for (i, line) in input.lines().enumerate() {
         let line = line.trim();

@@ -379,7 +379,7 @@ impl ConfluenceSource {
             },
         );
 
-        let source = Source::external(SourceType::Confluence, page.id.clone(), url);
+        let source = Source::with_url(SourceType::Confluence, page.id.clone(), url);
         let checksum = calculate_checksum(&full_content);
 
         let metadata = DocumentMetadata {

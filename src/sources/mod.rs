@@ -99,6 +99,6 @@ pub fn get_data_source(source_type: SourceType) -> Option<Box<dyn DataSource>> {
         SourceType::Jira => Some(Box::new(JiraSource::new())),
         SourceType::Confluence => Some(Box::new(ConfluenceSource::new())),
         SourceType::Figma => Some(Box::new(FigmaSource::new())),
-        _ => None,
+        SourceType::Local | SourceType::Other(_) => None,
     }
 }

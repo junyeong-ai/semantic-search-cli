@@ -264,11 +264,8 @@ impl VectorStore for QdrantBackend {
                     _ => None,
                 });
 
-                let location = if source_type.is_external() {
-                    source_url
-                        .as_deref()
-                        .unwrap_or(&source_location)
-                        .to_string()
+                let location = if let Some(url) = &source_url {
+                    url.clone()
                 } else if let (Some(start), Some(end)) = (line_start, line_end) {
                     format!("{}:{}-{}", source_location, start, end)
                 } else {

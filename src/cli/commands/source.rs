@@ -170,18 +170,16 @@ async fn handle_sync(
 ) -> Result<()> {
     let start_time = Instant::now();
 
-    let source_type: SourceType = source
-        .parse()
-        .map_err(|_| anyhow::anyhow!("unknown source type: {}", source))?;
+    let source_type: SourceType = source.parse().unwrap();
 
-    if !source_type.is_external() {
+    if source_type.cli_command().is_none() {
         anyhow::bail!(
-            "source '{}' is not an external source. Use 'ssearch index add' for local files.",
+            "source '{}' does not have CLI integration. Use 'ssearch import' for custom sources.",
             source
         );
     }
 
-    let data_source = get_data_source(source_type)
+    let data_source = get_data_source(source_type.clone())
         .ok_or_else(|| anyhow::anyhow!("no implementation found for source: {}", source))?;
 
     if !data_source.check_available()? {
@@ -320,13 +318,11 @@ async fn handle_delete(
     force: bool,
     verbose: bool,
 ) -> Result<()> {
-    let source_type: SourceType = source
-        .parse()
-        .map_err(|_| anyhow::anyhow!("unknown source type: {}", source))?;
+    let source_type: SourceType = source.parse().unwrap();
 
-    if !source_type.is_external() {
+    if source_type.cli_command().is_none() {
         anyhow::bail!(
-            "source '{}' is not an external source. Use 'ssearch index delete' for local files.",
+            "source '{}' does not have CLI integration. Use 'ssearch index delete' for local files.",
             source
         );
     }

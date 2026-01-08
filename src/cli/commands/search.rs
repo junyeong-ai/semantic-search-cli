@@ -62,16 +62,17 @@ pub async fn handle_search(args: SearchArgs, format: OutputFormat, verbose: bool
         .context("failed to parse tags")?
         .unwrap_or_default();
 
-    let source_types: Vec<SourceType> = if let Some(ref source_str) = args.source {
-        source_str
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.parse::<SourceType>().map_err(|e| anyhow::anyhow!("{e}")))
-            .collect::<Result<Vec<_>>>()?
-    } else {
-        Vec::new()
-    };
+    let source_types: Vec<SourceType> = args
+        .source
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse().unwrap())
+                .collect()
+        })
+        .unwrap_or_default();
 
     if verbose {
         eprintln!("Query: \"{query}\"");

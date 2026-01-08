@@ -73,14 +73,13 @@ impl PgVectorBackend {
     }
 
     fn build_location(
-        source_type: SourceType,
         source_location: &str,
         source_url: Option<&str>,
         line_start: Option<u32>,
         line_end: Option<u32>,
     ) -> String {
-        if source_type.is_external() {
-            source_url.unwrap_or(source_location).to_string()
+        if let Some(url) = source_url {
+            url.to_string()
         } else if let (Some(start), Some(end)) = (line_start, line_end) {
             format!("{}:{}-{}", source_location, start, end)
         } else {
@@ -346,7 +345,6 @@ impl VectorStore for PgVectorBackend {
                 let line_end_u32 = line_end.map(|v| v as u32);
 
                 let location = Self::build_location(
-                    source_type,
                     &source_location,
                     source_url.as_deref(),
                     line_start_u32,

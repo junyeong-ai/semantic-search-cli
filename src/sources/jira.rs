@@ -300,7 +300,7 @@ impl JiraSource {
         let path = build_issue_path(&issue);
         let url = format!("https://42dot.atlassian.net/browse/{}", key);
 
-        let source = Source::external(SourceType::Jira, key.clone(), url);
+        let source = Source::with_url(SourceType::Jira, key.clone(), url);
         let checksum = calculate_checksum(&content);
 
         let metadata = DocumentMetadata {
