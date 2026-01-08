@@ -63,14 +63,47 @@ sync()
 // Uses atlassian-cli (jira, confluence) and figma-cli
 ```
 
+### SourceType
+```rust
+// models/source.rs - Extensible enum with fallback
+pub enum SourceType {
+    Local,              // Local files
+    Jira,               // Jira issues
+    Confluence,         // Confluence pages
+    Figma,              // Figma designs
+    Other(String),      // Any custom type (notion, slack, github, etc.)
+}
+
+// FromStr never fails - unknown types become Other(String)
+impl FromStr for SourceType {
+    type Err = Infallible;
+    // "notion" → Other("notion".to_string())
+}
+```
+
+### Source Constructors
+```rust
+// models/source.rs - Three patterns
+Source::local(path)                           // Local files, no URL
+Source::with_url(source_type, location, url)  // External with URL
+Source::new(source_type, location, Option<url>) // General purpose
+```
+
 ---
 
 ## Adding Features
 
-### New Data Source
+### New Data Source (with CLI integration)
 1. `sources/newsource.rs`: Implement `new()`, `source_type()`, `check_available()`, `sync()`
-2. `models/source.rs`: Add `SourceType::NewSource`
-3. `sources/mod.rs`: Register in `get_data_source()`
+2. `sources/mod.rs`: Register in `get_data_source()` match arm
+3. `models/source.rs`: Add `SourceType::NewSource` variant (optional - can use `Other("newsource")`)
+
+### New Data Source (without CLI integration)
+Use `ssearch import` with custom `source_type`:
+```json
+{"content": "...", "source_type": "notion", "title": "Page Title"}
+```
+No code changes needed - `Other("notion")` is created automatically.
 
 ### New Search Filter
 1. `models/search.rs`: Add field to `SearchQuery`
@@ -116,7 +149,7 @@ sqlite3 ~/.cache/semantic-search-cli/metrics.db ".schema"
 ## Test Commands
 
 ```bash
-cargo test --release        # 47 tests
+cargo test --release        # 51 tests
 cargo clippy -- -D warnings # Lint
 cargo fmt --check           # Format check
 ```
